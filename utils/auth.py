@@ -59,6 +59,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     try:
         token = credentials.credentials
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        # Convert sub to user_id for backward compatibility
+        if "sub" in payload and "user_id" not in payload:
+            payload["user_id"] = int(payload["sub"])
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")

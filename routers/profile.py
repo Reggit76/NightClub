@@ -21,6 +21,7 @@ class PasswordChange(BaseModel):
 @router.get("/")
 async def get_profile(current_user: dict = Depends(get_current_user)):
     with get_db_cursor() as cur:
+        # Get user data with role
         cur.execute(
             """
             SELECT u.user_id, u.username, u.email, u.role, u.created_at,
@@ -35,6 +36,10 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
         
         if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
+            
+        # Update role in current_user if not present
+        if "role" not in current_user and profile["role"]:
+            current_user["role"] = profile["role"]
             
         # Get user statistics
         cur.execute(

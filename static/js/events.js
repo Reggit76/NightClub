@@ -12,12 +12,13 @@ async function loadEvents() {
             }
         }
         
-        const isAdminOrModerator = currentUser && ['admin', 'moderator'].includes(currentUser.role);
+        // Check if user has admin or moderator role
+        const isAdminOrModerator = currentUser && currentUser.role && ['admin', 'moderator'].includes(currentUser.role);
         
         let html = `
             <div class="row mb-4">
                 <div class="col">
-                    <h2>Предстоящие мероприятия</h2>
+                    <h2>Мероприятия</h2>
                 </div>
                 ${isAdminOrModerator ? `
                     <div class="col-auto">
@@ -28,152 +29,169 @@ async function loadEvents() {
                 ` : ''}
             </div>
             <div class="row">
+                ${events.map(event => `
+                    <div class="col-md-4 mb-4">
+                        <div class="event-card">
+                            <h4>${event.title}</h4>
+                            <p class="text-muted">${formatDate(event.event_date)}</p>
+                            <p>${event.description}</p>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="badge bg-primary">${event.category_name || 'Без категории'}</span>
+                                <span class="text-muted">${formatPrice(event.ticket_price)}</span>
+                            </div>
+                            <div class="mt-3">
+                                <div class="progress mb-2">
+                                    <div class="progress-bar" role="progressbar" 
+                                         style="width: ${(event.booked_seats / event.capacity * 100)}%">
+                                    </div>
+                                </div>
+                                <small class="text-muted">
+                                    ${event.booked_seats} из ${event.capacity} мест забронировано
+                                </small>
+                            </div>
+                            ${currentUser ? `
+                                <button class="btn btn-primary mt-3 w-100" onclick="bookEvent(${event.event_id})">
+                                    Забронировать
+                                </button>
+                            ` : `
+                                <button class="btn btn-primary mt-3 w-100" onclick="showLoginPrompt()">
+                                    Войдите для бронирования
+                                </button>
+                            `}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
         `;
         
         if (events.length === 0) {
-            html += `
-                <div class="col">
-                    <div class="alert alert-info">
-                        ${isAdminOrModerator ? 
-                            'Нет предстоящих мероприятий. Нажмите "Создать мероприятие", чтобы добавить новое.' :
-                            'В данный момент нет предстоящих мероприятий. Пожалуйста, проверьте позже.'}
-                    </div>
-                </div>
-            `;
-        } else {
-            events.forEach(event => {
-                const availableSeats = event.capacity - (event.booked_seats || 0);
-                html += `
-                    <div class="col-md-4">
-                        <div class="card event-card">
-                            <div class="card-body">
-                                <h5 class="card-title">${event.title}</h5>
-                                <p class="card-text">${event.description}</p>
-                                ${event.category_name ? `
-                                    <div class="mb-2">
-                                        <small class="text-muted">
-                                            <i class="fas fa-folder"></i> ${event.category_name}
-                                        </small>
-                                    </div>
-                                ` : ''}
-                                <div class="mb-2">
-                                    <small class="text-muted">
-                                        <i class="fas fa-calendar"></i> ${formatDate(event.event_date)}
-                                    </small>
-                                </div>
-                                <div class="mb-2">
-                                    <small class="text-muted">
-                                        <i class="fas fa-tag"></i> ${formatPrice(event.ticket_price)}
-                                    </small>
-                                </div>
-                                <div class="mb-3">
-                                    <small class="text-muted">
-                                        <i class="fas fa-chair"></i> ${availableSeats} мест свободно
-                                    </small>
-                                </div>
-                                ${currentUser ? `
-                                    <button class="btn btn-primary" onclick="showBookingModal(${event.event_id})"
-                                            ${availableSeats === 0 ? 'disabled' : ''}>
-                                        ${availableSeats === 0 ? 'Распродано' : 'Забронировать'}
-                                    </button>
-                                ` : `
-                                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#loginModal">
-                                        Войдите для бронирования
-                                    </button>
-                                `}
-                                ${isAdminOrModerator ? `
-                                    <button class="btn btn-outline-primary ms-2" onclick="showEditEventModal(${event.event_id})">
-                                        <i class="fas fa-edit"></i>
-                                    </button>
-                                    <button class="btn btn-outline-danger ms-2" onclick="deleteEvent(${event.event_id})">
-                                        <i class="fas fa-trash"></i>
-                                    </button>
-                                ` : ''}
-                            </div>
-                        </div>
-                    </div>
-                `;
-            });
-        }
-        
-        html += '</div>';
-        
-        // Add event creation modal for admin/moderator
-        if (isAdminOrModerator) {
-            // Get categories for the form
-            let categories = [];
-            try {
-                categories = await apiRequest('/events/categories');
-            } catch (error) {
-                console.warn('Failed to load categories:', error);
-            }
-            
-            html += `
-                <div class="modal fade" id="eventModal" tabindex="-1">
-                    <div class="modal-dialog">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title">Создать мероприятие</h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                            </div>
-                            <div class="modal-body">
-                                <form id="eventForm">
-                                    <input type="hidden" name="event_id">
-                                    <div class="mb-3">
-                                        <label class="form-label">Категория</label>
-                                        <select class="form-select" name="category_id">
-                                            <option value="">Без категории</option>
-                                            ${categories.map(cat => `
-                                                <option value="${cat.category_id}">${cat.name}</option>
-                                            `).join('')}
-                                        </select>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Название</label>
-                                        <input type="text" class="form-control" name="title" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Описание</label>
-                                        <textarea class="form-control" name="description" required></textarea>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Дата и время</label>
-                                        <input type="datetime-local" class="form-control" name="event_date" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Продолжительность (минут)</label>
-                                        <input type="number" class="form-control" name="duration" required min="30" value="120">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Вместимость</label>
-                                        <input type="number" class="form-control" name="capacity" required min="1" value="100">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Цена билета (₽)</label>
-                                        <input type="number" class="form-control" name="ticket_price" required min="0" step="0.01" value="1000">
-                                    </div>
-                                    <button type="submit" class="btn btn-primary">Сохранить</button>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
+            html = `
+                <div class="alert alert-info">
+                    Нет доступных мероприятий
                 </div>
             `;
         }
         
         $('#content').html(html);
-        
-        // Initialize event form handler
-        if (isAdminOrModerator) {
-            initEventFormHandler();
-        }
     } catch (error) {
-        $('#content').html(`
-            <div class="alert alert-danger">
-                Произошла ошибка при загрузке мероприятий. Пожалуйста, попробуйте позже.
-            </div>
-        `);
+        showError('Не удалось загрузить мероприятия');
     }
+}
+
+// Show create event modal
+function showCreateEventModal() {
+    const modal = `
+        <div class="modal fade" id="createEventModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Создание мероприятия</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="createEventForm" class="event-form" onsubmit="createEvent(event)">
+                            <div class="mb-3">
+                                <label class="form-label">Название</label>
+                                <input type="text" class="form-control" name="title" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Описание</label>
+                                <textarea class="form-control" name="description" rows="3" required></textarea>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Дата и время</label>
+                                <input type="datetime-local" class="form-control" name="event_date" required>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Длительность (минуты)</label>
+                                    <input type="number" class="form-control" name="duration" required min="30">
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Вместимость</label>
+                                    <input type="number" class="form-control" name="capacity" required min="1">
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Стоимость билета</label>
+                                <input type="number" class="form-control" name="ticket_price" required min="0" step="0.01">
+                            </div>
+                            <button type="submit" class="btn btn-primary">Создать</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Remove existing modal if any
+    $('#createEventModal').remove();
+    
+    // Add new modal to DOM and show it
+    $('body').append(modal);
+    $('#createEventModal').modal('show');
+}
+
+// Create event
+async function createEvent(event) {
+    event.preventDefault();
+    
+    const form = document.getElementById('createEventForm');
+    const formData = new FormData(form);
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    
+    try {
+        // Disable submit button and show loading state
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Создание...';
+        
+        // Check if user has permission
+        if (!currentUser || !currentUser.role || !['admin', 'moderator'].includes(currentUser.role)) {
+            throw new Error('У вас нет прав для создания мероприятий');
+        }
+        
+        const response = await apiRequest('/events', {
+            method: 'POST',
+            body: JSON.stringify({
+                title: formData.get('title'),
+                description: formData.get('description'),
+                event_date: formData.get('event_date'),
+                duration: parseInt(formData.get('duration')),
+                capacity: parseInt(formData.get('capacity')),
+                ticket_price: parseFloat(formData.get('ticket_price'))
+            })
+        });
+        
+        // Close modal and reload events
+        $('#createEventModal').modal('hide');
+        showSuccess('Мероприятие успешно создано');
+        loadEvents();
+    } catch (error) {
+        showError(error.message || 'Не удалось создать мероприятие');
+    } finally {
+        // Restore submit button
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalText;
+    }
+}
+
+// Book event
+async function bookEvent(eventId) {
+    try {
+        await apiRequest(`/bookings/book/${eventId}`, {
+            method: 'POST'
+        });
+        showSuccess('Бронирование успешно создано');
+        loadEvents();
+    } catch (error) {
+        showError('Не удалось забронировать мероприятие');
+    }
+}
+
+// Show login prompt
+function showLoginPrompt() {
+    $('#loginModal').modal('show');
 }
 
 // Event form handler
@@ -214,24 +232,6 @@ function initEventFormHandler() {
             // Error is handled by apiRequest
         }
     });
-}
-
-// Show create event modal
-async function showCreateEventModal() {
-    const modal = $('#eventModal');
-    modal.find('.modal-title').text('Создать мероприятие');
-    modal.find('form')[0].reset();
-    modal.find('[name="event_id"]').val('');
-    
-    // Set default values
-    const now = new Date();
-    now.setHours(now.getHours() + 1);
-    modal.find('[name="event_date"]').val(now.toISOString().slice(0, 16));
-    modal.find('[name="duration"]').val('120');
-    modal.find('[name="capacity"]').val('100');
-    modal.find('[name="ticket_price"]').val('1000');
-    
-    modal.modal('show');
 }
 
 // Show edit event modal

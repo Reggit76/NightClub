@@ -1,24 +1,40 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import Response
 import uvicorn
 from config import API_PREFIX
 from utils.auth import get_current_user, generate_csrf_token
 import os
 import logging
+from contextlib import asynccontextmanager
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("🚀 Nightclub Booking System starting up...")
+    logger.info(f"📚 API Documentation available at: /docs")
+    logger.info(f"🔗 API Base URL: {API_PREFIX}")
+    yield
+    # Shutdown
+    logger.info("👋 Nightclub Booking System shutting down...")
 
 app = FastAPI(
     title="NightClub Booking System",
     description="Comprehensive API for booking events at the nightclub",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # Security middleware - add trusted hosts in production
@@ -32,6 +48,19 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
+
+# Custom middleware to prevent caching in development
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    
+    # Add no-cache headers for API endpoints and static files in development
+    if request.url.path.startswith("/api/") or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    
+    return response
 
 # Import and include routers
 try:
@@ -82,22 +111,24 @@ async def get_system_info():
         }
     }
 
+# Custom StaticFiles class to add no-cache headers
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if isinstance(response, FileResponse):
+            # Add no-cache headers for development
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
 # Mount static files
 static_path = "static"
 if os.path.exists(static_path):
-    app.mount("/static", StaticFiles(directory=static_path), name="static")
+    app.mount("/static", NoCacheStaticFiles(directory=static_path), name="static")
     logger.info("Static files mounted successfully")
 else:
     logger.warning(f"Static directory '{static_path}' not found")
-
-@app.get("/")
-async def root():
-    """Serve the main application page"""
-    index_path = os.path.join("static", "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    else:
-        raise HTTPException(status_code=404, detail="Application not found")
 
 # Handle SPA routes - return index.html for any non-API routes
 @app.get("/{full_path:path}")
@@ -123,34 +154,38 @@ async def not_found_handler(request: Request, exc: HTTPException):
     """Custom 404 handler"""
     # For API routes, return JSON
     if request.url.path.startswith(f"{API_PREFIX}/"):
-        return {"detail": "API endpoint not found"}
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "API endpoint not found"}
+        )
     
     # For web routes, serve the SPA
     index_path = os.path.join("static", "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
     else:
-        return {"detail": "Application not found"}
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Application not found"}
+        )
+
+@app.exception_handler(422)
+async def validation_exception_handler(request: Request, exc):
+    """Custom 422 handler for validation errors"""
+    logger.error(f"Validation error on {request.url}: {exc}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors() if hasattr(exc, 'errors') else "Validation error"}
+    )
 
 @app.exception_handler(500)
 async def internal_error_handler(request: Request, exc: Exception):
     """Custom 500 handler"""
-    logger.error(f"Internal server error: {exc}")
-    return {"detail": "Internal server error"}
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    """Application startup event"""
-    logger.info("🎪 Nightclub Booking System starting up...")
-    logger.info(f"📚 API Documentation available at: /docs")
-    logger.info(f"🔗 API Base URL: {API_PREFIX}")
-
-# Shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Application shutdown event"""
-    logger.info("👋 Nightclub Booking System shutting down...")
+    logger.error(f"Internal server error on {request.url}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
+    )
 
 if __name__ == "__main__":
     # Development server configuration

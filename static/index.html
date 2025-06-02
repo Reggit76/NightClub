@@ -6,40 +6,56 @@
     <title>Night Club - Система бронирования</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
+    <link href="/static/css/style.css?v=1" rel="stylesheet">
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container">
-            <a class="navbar-brand" href="/">Night Club</a>
+            <a class="navbar-brand" href="/" onclick="navigateTo('events'); return false;">
+                <i class="fas fa-music me-2"></i>Night Club
+            </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="#" data-page="events">Мероприятия</a>
+                        <a class="nav-link active" href="#" data-page="events">
+                            <i class="fas fa-calendar-alt me-1"></i>Мероприятия
+                        </a>
                     </li>
                     <li class="nav-item auth-required" style="display: none;">
-                        <a class="nav-link" href="#" data-page="my-bookings">Мои бронирования</a>
+                        <a class="nav-link" href="#" data-page="my-bookings">
+                            <i class="fas fa-ticket-alt me-1"></i>Мои бронирования
+                        </a>
                     </li>
                     <li class="nav-item admin-only" style="display: none;">
-                        <a class="nav-link" href="#" data-page="admin">Панель управления</a>
+                        <a class="nav-link" href="#" data-page="admin">
+                            <i class="fas fa-cog me-1"></i>Панель управления
+                        </a>
                     </li>
                 </ul>
                 <div class="auth-buttons">
-                    <button class="btn btn-outline-light me-2" data-bs-toggle="modal" data-bs-target="#loginModal">Войти</button>
-                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerModal">Регистрация</button>
+                    <button class="btn btn-outline-light me-2" data-bs-toggle="modal" data-bs-target="#loginModal">
+                        <i class="fas fa-sign-in-alt me-1"></i>Войти
+                    </button>
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerModal">
+                        <i class="fas fa-user-plus me-1"></i>Регистрация
+                    </button>
                 </div>
                 <div class="user-info d-none">
                     <div class="dropdown">
                         <button class="btn btn-outline-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                            <span class="username"></span>
+                            <i class="fas fa-user me-1"></i><span class="username"></span>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="#" data-page="profile">Профиль</a></li>
+                            <li><a class="dropdown-item" href="#" data-page="profile">
+                                <i class="fas fa-user-edit me-1"></i>Профиль
+                            </a></li>
                             <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="#" onclick="logout()">Выйти</a></li>
+                            <li><a class="dropdown-item" href="#" onclick="logout()">
+                                <i class="fas fa-sign-out-alt me-1"></i>Выйти
+                            </a></li>
                         </ul>
                     </div>
                 </div>
@@ -48,7 +64,14 @@
     </nav>
 
     <div class="container mt-4">
-        <div id="content"></div>
+        <div id="content">
+            <div class="text-center">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Загрузка...</span>
+                </div>
+                <p class="mt-2">Загрузка системы...</p>
+            </div>
+        </div>
     </div>
 
     <!-- Login Modal -->
@@ -56,20 +79,37 @@
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Вход</h5>
+                    <h5 class="modal-title">
+                        <i class="fas fa-sign-in-alt me-2"></i>Вход в систему
+                    </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
                     <form id="loginForm" onsubmit="login(event)">
                         <div class="mb-3">
-                            <label class="form-label">Email или имя пользователя</label>
-                            <input type="text" class="form-control" name="username" required>
+                            <label class="form-label">
+                                <i class="fas fa-user me-1"></i>Имя пользователя
+                            </label>
+                            <input type="text" class="form-control" name="username" required 
+                                   placeholder="Введите имя пользователя">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Пароль</label>
-                            <input type="password" class="form-control" name="password" required>
+                            <label class="form-label">
+                                <i class="fas fa-lock me-1"></i>Пароль
+                            </label>
+                            <input type="password" class="form-control" name="password" required
+                                   placeholder="Введите пароль">
                         </div>
-                        <button type="submit" class="btn btn-primary">Войти</button>
+                        <div class="mb-3">
+                            <small class="text-muted">
+                                <strong>Тестовые аккаунты:</strong><br>
+                                Админ: admin / admin123<br>
+                                Пользователь: user123 / test123
+                            </small>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="fas fa-sign-in-alt me-1"></i>Войти
+                        </button>
                     </form>
                 </div>
             </div>
@@ -81,51 +121,73 @@
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Регистрация</h5>
+                    <h5 class="modal-title">
+                        <i class="fas fa-user-plus me-2"></i>Регистрация
+                    </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
                     <form id="registerForm" onsubmit="register(event)">
                         <div class="mb-3">
-                            <label class="form-label">Имя пользователя</label>
-                            <input type="text" class="form-control" name="username" required>
+                            <label class="form-label">
+                                <i class="fas fa-user me-1"></i>Имя пользователя *
+                            </label>
+                            <input type="text" class="form-control" name="username" required
+                                   placeholder="Минимум 3 символа, только буквы, цифры и _">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Email</label>
-                            <input type="email" class="form-control" name="email" required>
+                            <label class="form-label">
+                                <i class="fas fa-envelope me-1"></i>Email *
+                            </label>
+                            <input type="email" class="form-control" name="email" required
+                                   placeholder="your@email.com">
                         </div>
                         <div class="row">
                             <div class="col-md-6 mb-3">
-                                <label class="form-label">Имя</label>
+                                <label class="form-label">
+                                    <i class="fas fa-id-card me-1"></i>Имя *
+                                </label>
                                 <input type="text" class="form-control" name="first_name" required>
                             </div>
                             <div class="col-md-6 mb-3">
-                                <label class="form-label">Фамилия</label>
+                                <label class="form-label">Фамилия *</label>
                                 <input type="text" class="form-control" name="last_name" required>
                             </div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Пароль</label>
-                            <input type="password" class="form-control" name="password" required>
+                            <label class="form-label">
+                                <i class="fas fa-lock me-1"></i>Пароль *
+                            </label>
+                            <input type="password" class="form-control" name="password" required
+                                   placeholder="Минимум 6 символов">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Подтверждение пароля</label>
+                            <label class="form-label">
+                                <i class="fas fa-lock me-1"></i>Подтверждение пароля *
+                            </label>
                             <input type="password" class="form-control" name="password_confirm" required>
                         </div>
-                        <button type="submit" class="btn btn-primary">Зарегистрироваться</button>
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="fas fa-user-plus me-1"></i>Зарегистрироваться
+                        </button>
                     </form>
                 </div>
             </div>
         </div>
     </div>
 
+    <!-- Scripts -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/main.js"></script>
-    <script src="/static/js/auth.js"></script>
-    <script src="/static/js/events.js"></script>
-    <script src="/static/js/bookings.js"></script>
-    <script src="/static/js/admin.js"></script>
-    <script src="/static/js/profile.js"></script>
+    
+    <!-- Load all modules first -->
+    <script src="/static/js/events.js?v=1"></script>
+    <script src="/static/js/bookings.js?v=1"></script>
+    <script src="/static/js/admin.js?v=1"></script>
+    <script src="/static/js/profile.js?v=1"></script>
+    <script src="/static/js/auth.js?v=1"></script>
+    
+    <!-- Load main.js last to initialize everything -->
+    <script src="/static/js/main.js?v=1"></script>
 </body>
 </html>

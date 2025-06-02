@@ -3,6 +3,11 @@ async function loadProfile() {
     try {
         const profile = await apiRequest('/profile');
         
+        // Update current user data with profile info
+        if (currentUser && profile.role) {
+            currentUser.role = profile.role;
+        }
+        
         let html = `
             <div class="row mb-4">
                 <div class="col">
@@ -198,9 +203,9 @@ function initPasswordFormHandler() {
 // Helper function to translate roles
 function translateRole(role) {
     const roles = {
-        'user': 'Пользователь',
+        'admin': 'Администратор',
         'moderator': 'Модератор',
-        'admin': 'Администратор'
+        'user': 'Пользователь'
     };
     return roles[role] || role;
 }
