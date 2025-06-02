@@ -1,0 +1,117 @@
+/* General styles */
+body {
+    background-color: #f8f9fa;
+}
+
+/* Event card styles */
+.event-card {
+    transition: transform 0.2s;
+    margin-bottom: 20px;
+}
+
+.event-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.event-card .card-img-top {
+    height: 200px;
+    object-fit: cover;
+}
+
+/* Booking styles */
+.seat-map {
+    display: grid;
+    gap: 10px;
+    padding: 20px;
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.seat {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.seat.available {
+    background-color: #e9ecef;
+}
+
+.seat.selected {
+    background-color: #198754;
+    color: white;
+    border-color: #198754;
+}
+
+.seat.booked {
+    background-color: #dc3545;
+    color: white;
+    border-color: #dc3545;
+    cursor: not-allowed;
+}
+
+/* Admin panel styles */
+.stats-card {
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.stats-card h3 {
+    margin-bottom: 15px;
+    color: #495057;
+}
+
+/* Loading spinner */
+.loading {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 200px;
+}
+
+.loading::after {
+    content: "";
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #0d6efd;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Toast notifications */
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1050;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .event-card .card-img-top {
+        height: 150px;
+    }
+    
+    .seat {
+        width: 30px;
+        height: 30px;
+        font-size: 0.8rem;
+    }
+} 
