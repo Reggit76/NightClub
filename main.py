@@ -60,6 +60,10 @@ async def add_no_cache_headers(request: Request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     
+    # Log API requests for debugging
+    if request.url.path.startswith("/api/"):
+        logger.info(f"{request.method} {request.url.path} -> {response.status_code}")
+    
     return response
 
 # Import and include routers
@@ -74,8 +78,17 @@ try:
     app.include_router(profile.router, prefix=f"{API_PREFIX}/profile", tags=["User Profile"])
     
     logger.info("All routers loaded successfully")
+    logger.info("Available routes:")
+    for route in app.routes:
+        if hasattr(route, 'path') and route.path.startswith('/api/'):
+            logger.info(f"  {route.methods} {route.path}")
+    
 except ImportError as e:
     logger.error(f"Failed to import routers: {e}")
+    logger.error("Make sure all router files exist and have no syntax errors")
+    raise
+except Exception as e:
+    logger.error(f"Error setting up routers: {e}")
     raise
 
 # Health check endpoint
@@ -110,29 +123,6 @@ async def get_system_info():
             "profile": f"{API_PREFIX}/profile"
         }
     }
-
-# Zones endpoint for events
-@app.get(f"{API_PREFIX}/events/zones")
-async def get_zones():
-    """Get all available zones"""
-    from database import get_db_cursor
-    
-    with get_db_cursor() as cur:
-        cur.execute("""
-            SELECT z.zone_id, z.name, z.description, z.capacity,
-                   COUNT(s.seat_id) as total_seats
-            FROM club_zones z
-            LEFT JOIN seats s ON z.zone_id = s.zone_id
-            GROUP BY z.zone_id, z.name, z.description, z.capacity
-            ORDER BY z.zone_id
-        """)
-        zones = cur.fetchall()
-        
-        # Add available seats count (this is a simplified version)
-        for zone in zones:
-            zone['available_seats'] = zone['total_seats']  # Simplified for demo
-        
-        return zones
 
 # Custom StaticFiles class to add no-cache headers
 class NoCacheStaticFiles(StaticFiles):
@@ -177,9 +167,10 @@ async def not_found_handler(request: Request, exc: HTTPException):
     """Custom 404 handler"""
     # For API routes, return JSON
     if request.url.path.startswith(f"{API_PREFIX}/"):
+        logger.warning(f"API 404: {request.method} {request.url.path}")
         return JSONResponse(
             status_code=404,
-            content={"detail": "API endpoint not found"}
+            content={"detail": f"API endpoint not found: {request.url.path}"}
         )
     
     # For web routes, serve the SPA

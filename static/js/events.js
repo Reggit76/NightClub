@@ -1,25 +1,47 @@
 // Load events page
 async function loadEvents() {
     try {
+        console.log('Loading events...');
+        
         let events = [];
         let categories = [];
         
         try {
-            [events, categories] = await Promise.all([
+            // Load events and categories with proper error handling
+            const [eventsResponse, categoriesResponse] = await Promise.allSettled([
                 apiRequest('/events'),
                 apiRequest('/events/categories')
             ]);
-        } catch (error) {
-            if (error.message.includes('404')) {
-                events = [];
-                categories = [];
+            
+            if (eventsResponse.status === 'fulfilled') {
+                events = eventsResponse.value || [];
             } else {
-                throw error;
+                console.warn('Failed to load events:', eventsResponse.reason);
+                events = [];
             }
+            
+            if (categoriesResponse.status === 'fulfilled') {
+                categories = categoriesResponse.value || [];
+            } else {
+                console.warn('Failed to load categories:', categoriesResponse.reason);
+                categories = [];
+            }
+            
+        } catch (error) {
+            console.error('Error loading events data:', error);
+            events = [];
+            categories = [];
         }
         
+        console.log('Loaded events:', events.length, 'categories:', categories.length);
+        
         // Check if user has admin or moderator role
-        const isAdminOrModerator = currentUser && currentUser.role && ['admin', 'moderator'].includes(currentUser.role);
+        const isAdminOrModerator = currentUser && 
+                                   currentUser.role && 
+                                   ['admin', 'moderator'].includes(currentUser.role);
+        
+        console.log('Current user:', currentUser);
+        console.log('Is admin or moderator:', isAdminOrModerator);
         
         let html = `
             <div class="row mb-4">
@@ -79,6 +101,11 @@ async function loadEvents() {
                         <i class="fas fa-calendar-alt fa-2x mb-3"></i>
                         <h5>Нет доступных мероприятий</h5>
                         <p class="mb-0">В настоящее время нет запланированных мероприятий. Проверьте позже!</p>
+                        ${isAdminOrModerator ? `
+                            <button class="btn btn-primary mt-3" onclick="showCreateEventModal()">
+                                <i class="fas fa-plus me-1"></i>Создать первое мероприятие
+                            </button>
+                        ` : ''}
                     </div>
                 </div>
             `;
@@ -162,11 +189,15 @@ async function loadEvents() {
         window.eventsData = events;
         window.categoriesData = categories;
         
+        console.log('Events page loaded successfully');
+        
     } catch (error) {
+        console.error('Failed to load events page:', error);
         $('#content').html(`
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-triangle me-2"></i>
                 Не удалось загрузить мероприятия. Пожалуйста, попробуйте позже.
+                <br><small>Ошибка: ${error.message}</small>
             </div>
         `);
     }
@@ -216,6 +247,9 @@ function clearFilters() {
 
 // Show create event modal
 function showCreateEventModal() {
+    console.log('Showing create event modal...');
+    console.log('Categories data:', window.categoriesData);
+    
     const modal = `
         <div class="modal fade" id="createEventModal" tabindex="-1">
             <div class="modal-dialog modal-lg">
@@ -298,7 +332,7 @@ function showCreateEventModal() {
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
                             Отмена
                         </button>
-                        <button type="button" class="btn btn-primary" onclick="createEvent()">
+                        <button type="button" class="btn btn-primary" id="createEventBtn" onclick="createNewEvent()">
                             <i class="fas fa-save me-1"></i>Создать мероприятие
                         </button>
                     </div>
@@ -319,12 +353,16 @@ function showCreateEventModal() {
     tomorrow.setDate(tomorrow.getDate() + 1);
     const minDate = tomorrow.toISOString().slice(0, 16);
     document.querySelector('input[name="event_date"]').min = minDate;
+    
+    console.log('Create event modal shown');
 }
 
 // Create event
-async function createEvent() {
+async function createNewEvent() {
+    console.log('Creating event...');
+    
     const form = document.getElementById('createEventForm');
-    const submitBtn = event.target;
+    const submitBtn = document.getElementById('createEventBtn');
     const originalText = submitBtn.innerHTML;
     
     // Get form data
@@ -337,6 +375,8 @@ async function createEvent() {
     const duration = parseInt(formData.get('duration'));
     const capacity = parseInt(formData.get('capacity'));
     const ticketPrice = parseFloat(formData.get('ticket_price'));
+    
+    console.log('Form data:', {title, description, eventDate, duration, capacity, ticketPrice});
     
     if (!title || !description || !eventDate || !duration || !capacity || ticketPrice < 0) {
         showError('Пожалуйста, заполните все обязательные поля');
@@ -385,10 +425,14 @@ async function createEvent() {
             eventData.category_id = parseInt(categoryId);
         }
         
+        console.log('Sending event data:', eventData);
+        
         const response = await apiRequest('/events', {
             method: 'POST',
             body: JSON.stringify(eventData)
         });
+        
+        console.log('Event created:', response);
         
         // Close modal and reload events
         $('#createEventModal').modal('hide');
@@ -464,7 +508,7 @@ async function showEditEventModal(eventId) {
                                         <div class="mb-3">
                                             <label class="form-label">Длительность (минуты) *</label>
                                             <input type="number" class="form-control" name="duration" required 
-                                                   min="30" value="${event.duration ? event.duration.match(/\\d+/)?.[0] || 120 : 120}">
+                                                   min="30" value="${event.duration ? event.duration.match(/\d+/)?.[0] || 120 : 120}">
                                         </div>
                                     </div>
                                 </div>

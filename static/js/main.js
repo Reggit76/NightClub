@@ -199,6 +199,8 @@ async function apiRequest(endpoint, options = {}) {
 
 // Page navigation
 function navigateTo(page) {
+    console.log('Navigating to:', page);
+    
     // Check if routes are initialized
     if (!routes || Object.keys(routes).length === 0) {
         console.warn('Routes not initialized yet, retrying...');
@@ -361,7 +363,9 @@ function setupEventHandlers() {
 }
 
 // Separate function to check auth status
-function checkAuthStatus() {
+async function checkAuthStatus() {
+    console.log('Checking auth status...');
+    
     const token = localStorage.getItem('token');
     if (token) {
         try {
@@ -372,17 +376,43 @@ function checkAuthStatus() {
             }
             
             const payload = JSON.parse(atob(parts[1]));
+            console.log('Token payload:', payload);
             
             // Check if token is not expired (with 5 minute buffer)
             const now = Math.floor(Date.now() / 1000);
             const expiry = payload.exp;
             
             if (expiry && expiry > now + 300) { // 5 minute buffer
-                currentUser = payload;
+                // Create user object with proper structure
+                currentUser = {
+                    user_id: payload.user_id || parseInt(payload.sub),
+                    username: payload.username,
+                    role: payload.role || 'user',
+                    sub: payload.sub
+                };
+                
+                console.log('User authenticated from token:', currentUser);
+                
+                // Try to get additional user info from API to ensure role is correct
+                try {
+                    const userInfo = await apiRequest('/auth/me');
+                    if (userInfo && userInfo.role) {
+                        currentUser.role = userInfo.role;
+                        currentUser.username = userInfo.username;
+                        currentUser.email = userInfo.email;
+                        currentUser.first_name = userInfo.first_name;
+                        currentUser.last_name = userInfo.last_name;
+                        console.log('User info updated from API:', currentUser);
+                    }
+                } catch (error) {
+                    console.warn('Could not fetch user info, using token data:', error);
+                }
+                
                 updateAuthUI();
+                
                 // Get CSRF token for authenticated users
                 getCsrfToken().catch(err => console.warn('Failed to get CSRF token:', err));
-                console.log('User authenticated:', currentUser.username);
+                
             } else {
                 console.log('Token expired or about to expire, removing...');
                 localStorage.removeItem('token');
@@ -404,6 +434,8 @@ function checkAuthStatus() {
 
 // Update UI based on authentication status
 function updateAuthUI() {
+    console.log('Updating auth UI for user:', currentUser);
+    
     if (currentUser) {
         $('.auth-buttons').addClass('d-none');
         $('.user-info').removeClass('d-none');
@@ -415,8 +447,10 @@ function updateAuthUI() {
         // Show/hide admin-only elements
         if (['admin', 'moderator'].includes(currentUser.role)) {
             $('.admin-only').show();
+            console.log('Showing admin elements for role:', currentUser.role);
         } else {
             $('.admin-only').hide();
+            console.log('Hiding admin elements for role:', currentUser.role);
         }
         
         // If current page is not accessible, redirect to events

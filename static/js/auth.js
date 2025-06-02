@@ -36,9 +36,27 @@ async function login(event) {
             }
         }
         
-        // Store token and update UI
+        console.log('Login response:', data);
+        
+        // Store token and update user data
         localStorage.setItem('token', data.access_token);
-        currentUser = data.user || JSON.parse(atob(data.access_token.split('.')[1]));
+        
+        // Parse token to get user info
+        const tokenParts = data.access_token.split('.');
+        const tokenPayload = JSON.parse(atob(tokenParts[1]));
+        
+        // Create currentUser object with all available data
+        currentUser = {
+            user_id: data.user?.user_id || parseInt(tokenPayload.sub || tokenPayload.user_id),
+            username: data.user?.username || tokenPayload.username,
+            email: data.user?.email,
+            first_name: data.user?.first_name,
+            last_name: data.user?.last_name,
+            role: data.user?.role || tokenPayload.role || 'user',
+            sub: tokenPayload.sub || tokenPayload.user_id
+        };
+        
+        console.log('Current user set to:', currentUser);
         
         // Store CSRF token if provided
         if (data.csrf_token) {
@@ -162,6 +180,8 @@ async function register(event) {
                 throw new Error(data.detail || 'Ошибка регистрации');
             }
         }
+        
+        console.log('Registration successful:', data);
         
         // Close modal and show success message
         $('#registerModal').modal('hide');

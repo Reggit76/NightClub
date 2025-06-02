@@ -73,21 +73,10 @@ async def register(user: UserRegister):
             (new_user["user_id"], "register", details_json)
         )
         
-        # Create access token
-        token = create_access_token({"sub": str(new_user["user_id"])})
-        
         return JSONResponse(
             content={
-                "access_token": token,
-                "token_type": "bearer",
-                "user": {
-                    "user_id": new_user["user_id"],
-                    "email": new_user["email"],
-                    "username": new_user["username"],
-                    "first_name": profile["first_name"],
-                    "last_name": profile["last_name"],
-                    "role": new_user["role"]
-                }
+                "message": "User registered successfully",
+                "user_id": new_user["user_id"]
             }
         )
 
@@ -100,7 +89,7 @@ async def login(user: UserLogin):
             SELECT u.*, p.first_name, p.last_name
             FROM users u
             LEFT JOIN user_profiles p ON u.user_id = p.user_id
-            WHERE u.username = %s
+            WHERE u.username = %s AND u.is_active = true
             """,
             (user.username,)
         )
@@ -113,11 +102,15 @@ async def login(user: UserLogin):
                 detail="Incorrect username or password"
             )
             
-        # Create access token
-        token = create_access_token({
+        # Create access token with proper fields
+        token_data = {
             "sub": str(db_user["user_id"]),
+            "user_id": db_user["user_id"],
+            "username": db_user["username"],
             "role": db_user["role"]
-        })
+        }
+        
+        token = create_access_token(token_data)
         
         # Log the action
         details_json = json.dumps({"username": user.username})
@@ -162,7 +155,9 @@ async def logout(current_user: dict = Depends(verify_csrf())):
 @router.get("/me")
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     with get_db_cursor() as cur:
-        # Get user and profile data
+        # Get user and profile data using user_id from token
+        user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
+        
         cur.execute(
             """
             SELECT u.*, p.first_name, p.last_name
@@ -170,7 +165,7 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
             LEFT JOIN user_profiles p ON u.user_id = p.user_id
             WHERE u.user_id = %s
             """,
-            (current_user["sub"],)
+            (user_id,)
         )
         user_data = cur.fetchone()
         
@@ -183,5 +178,6 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
             "username": user_data["username"],
             "first_name": user_data["first_name"],
             "last_name": user_data["last_name"],
-            "role": user_data["role"]
+            "role": user_data["role"],
+            "is_active": user_data["is_active"]
         })
