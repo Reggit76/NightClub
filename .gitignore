@@ -1,3 +1,10 @@
 /.env
 /.venv
 /__pycache__
+utils/__pycache__/auth.cpython-312.pyc
+routers/__pycache__/admin.cpython-312.pyc
+routers/__pycache__/auth.cpython-312.pyc
+routers/__pycache__/bookings.cpython-312.pyc
+routers/__pycache__/events.cpython-312.pyc
+routers/__pycache__/profile.cpython-312.pyc
+utils/__pycache__/auth.cpython-312.pyc

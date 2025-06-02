@@ -2,13 +2,14 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 from database import get_db_cursor
-from utils.auth import check_role
+from utils.auth import check_role, verify_csrf
 from datetime import datetime
+import json
 
 router = APIRouter()
 
 class UserUpdate(BaseModel):
-    role: str
+    role: Optional[str] = None
     is_active: Optional[bool] = None
 
 @router.get("/users")
@@ -75,8 +76,11 @@ async def get_user_details(
 async def update_user(
     user_id: int,
     user_update: UserUpdate,
-    current_user: dict = Depends(check_role(["admin"]))
+    current_user: dict = Depends(verify_csrf())
 ):
+    # Check if user has admin role
+    if current_user["role"] not in ["admin"]:
+        raise HTTPException(status_code=403, detail="Operation not permitted")
     if user_id == current_user["user_id"]:
         raise HTTPException(status_code=400, detail="Невозможно изменить свою собственную роль")
         
@@ -87,12 +91,19 @@ async def update_user(
             raise HTTPException(status_code=404, detail="Пользователь не найден")
             
         # Update user role and status
-        update_fields = ["role = %s"]
-        params = [user_update.role]
+        update_fields = []
+        params = []
         
+        if user_update.role is not None:
+            update_fields.append("role = %s")
+            params.append(user_update.role)
+            
         if user_update.is_active is not None:
             update_fields.append("is_active = %s")
             params.append(user_update.is_active)
+            
+        if not update_fields:
+            return {"message": "Нет полей для обновления"}
             
         params.append(user_id)
         
@@ -106,18 +117,20 @@ async def update_user(
         )
         
         # Log the action
+        details_dict = {
+            "target_user_id": user_id,
+            "new_role": user_update.role,
+            "new_status": user_update.is_active
+        }
+        
         cur.execute(
             """
             INSERT INTO audit_logs (user_id, action, details)
-            VALUES (%s, 'update_user_role', %s::jsonb)
+            VALUES (%s, 'update_user_role', %s)
             """,
             (
                 current_user["user_id"],
-                {
-                    "target_user_id": user_id,
-                    "new_role": user_update.role,
-                    "new_status": user_update.is_active
-                }
+                json.dumps(details_dict)
             )
         )
         
@@ -176,4 +189,4 @@ async def get_stats(current_user: dict = Depends(check_role(["admin", "moderator
             "overall": overall_stats,
             "upcoming_events": upcoming_events_stats,
             "categories": category_stats
-        } 
+        }

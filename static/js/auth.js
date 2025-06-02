@@ -1,63 +1,97 @@
-// Login form handler
-$('#loginForm').submit(async function(e) {
-    e.preventDefault();
+// Login function
+async function login(event) {
+    event.preventDefault();
     
-    const formData = {
-        username: this.username.value,
-        password: this.password.value
-    };
+    const form = document.getElementById('loginForm');
+    const formData = new FormData(form);
     
     try {
-        const response = await apiRequest('/auth/login', {
+        const response = await fetch(`${API_URL}/auth/login`, {
             method: 'POST',
-            body: JSON.stringify(formData)
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                username: formData.get('username'),
+                password: formData.get('password')
+            })
         });
         
-        localStorage.setItem('token', response.access_token);
-        const payload = JSON.parse(atob(response.access_token.split('.')[1]));
-        currentUser = payload;
+        const data = await response.json();
         
+        if (!response.ok) {
+            throw new Error(data.detail || 'Ошибка входа');
+        }
+        
+        // Store token and update UI
+        localStorage.setItem('token', data.access_token);
+        currentUser = JSON.parse(atob(data.access_token.split('.')[1]));
+        
+        // Store CSRF token if provided
+        if (data.csrf_token) {
+            csrfToken = data.csrf_token;
+        }
+        
+        // Close modal and update UI
         $('#loginModal').modal('hide');
-        this.reset();
+        form.reset();
         updateAuthUI();
-        showSuccess('Logged in successfully');
+        showSuccess('Вы успешно вошли в систему');
+        
+        // Redirect to events page
         navigateTo('events');
     } catch (error) {
-        // Error is handled by apiRequest
+        showError(error.message);
     }
-});
+}
 
-// Register form handler
-$('#registerForm').submit(async function(e) {
-    e.preventDefault();
+// Register function
+async function register(event) {
+    event.preventDefault();
     
-    const formData = {
-        username: this.username.value,
-        email: this.email.value,
-        password: this.password.value,
-        first_name: this.first_name.value,
-        last_name: this.last_name.value
-    };
+    const form = document.getElementById('registerForm');
+    const formData = new FormData(form);
+    
+    // Validate password confirmation
+    if (formData.get('password') !== formData.get('password_confirm')) {
+        showError('Пароли не совпадают');
+        return;
+    }
     
     try {
-        await apiRequest('/auth/register', {
+        const response = await fetch(`${API_URL}/auth/register`, {
             method: 'POST',
-            body: JSON.stringify(formData)
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                username: formData.get('username'),
+                email: formData.get('email'),
+                password: formData.get('password')
+            })
         });
         
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.detail || 'Ошибка регистрации');
+        }
+        
+        // Close modal and show success message
         $('#registerModal').modal('hide');
-        this.reset();
-        showSuccess('Registered successfully. Please log in.');
+        form.reset();
+        showSuccess('Регистрация успешна! Теперь вы можете войти в систему.');
     } catch (error) {
-        // Error is handled by apiRequest
+        showError(error.message);
     }
-});
+}
 
-// Logout handler
-$('#logoutBtn').click(function() {
+// Logout function
+function logout() {
     localStorage.removeItem('token');
     currentUser = null;
+    csrfToken = null;
     updateAuthUI();
     navigateTo('events');
-    showSuccess('Logged out successfully');
-}); 
+    showSuccess('Вы успешно вышли из системы');
+}

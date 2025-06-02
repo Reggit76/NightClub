@@ -42,13 +42,20 @@ async function loadEvents() {
             `;
         } else {
             events.forEach(event => {
-                const availableSeats = event.capacity - event.booked_seats;
+                const availableSeats = event.capacity - (event.booked_seats || 0);
                 html += `
                     <div class="col-md-4">
                         <div class="card event-card">
                             <div class="card-body">
                                 <h5 class="card-title">${event.title}</h5>
                                 <p class="card-text">${event.description}</p>
+                                ${event.category_name ? `
+                                    <div class="mb-2">
+                                        <small class="text-muted">
+                                            <i class="fas fa-folder"></i> ${event.category_name}
+                                        </small>
+                                    </div>
+                                ` : ''}
                                 <div class="mb-2">
                                     <small class="text-muted">
                                         <i class="fas fa-calendar"></i> ${formatDate(event.event_date)}
@@ -65,8 +72,9 @@ async function loadEvents() {
                                     </small>
                                 </div>
                                 ${currentUser ? `
-                                    <button class="btn btn-primary" onclick="showBookingModal(${event.event_id})">
-                                        Забронировать
+                                    <button class="btn btn-primary" onclick="showBookingModal(${event.event_id})"
+                                            ${availableSeats === 0 ? 'disabled' : ''}>
+                                        ${availableSeats === 0 ? 'Распродано' : 'Забронировать'}
                                     </button>
                                 ` : `
                                     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#loginModal">
@@ -92,6 +100,14 @@ async function loadEvents() {
         
         // Add event creation modal for admin/moderator
         if (isAdminOrModerator) {
+            // Get categories for the form
+            let categories = [];
+            try {
+                categories = await apiRequest('/events/categories');
+            } catch (error) {
+                console.warn('Failed to load categories:', error);
+            }
+            
             html += `
                 <div class="modal fade" id="eventModal" tabindex="-1">
                     <div class="modal-dialog">
@@ -103,6 +119,15 @@ async function loadEvents() {
                             <div class="modal-body">
                                 <form id="eventForm">
                                     <input type="hidden" name="event_id">
+                                    <div class="mb-3">
+                                        <label class="form-label">Категория</label>
+                                        <select class="form-select" name="category_id">
+                                            <option value="">Без категории</option>
+                                            ${categories.map(cat => `
+                                                <option value="${cat.category_id}">${cat.name}</option>
+                                            `).join('')}
+                                        </select>
+                                    </div>
                                     <div class="mb-3">
                                         <label class="form-label">Название</label>
                                         <input type="text" class="form-control" name="title" required>
@@ -117,15 +142,15 @@ async function loadEvents() {
                                     </div>
                                     <div class="mb-3">
                                         <label class="form-label">Продолжительность (минут)</label>
-                                        <input type="number" class="form-control" name="duration" required min="30">
+                                        <input type="number" class="form-control" name="duration" required min="30" value="120">
                                     </div>
                                     <div class="mb-3">
                                         <label class="form-label">Вместимость</label>
-                                        <input type="number" class="form-control" name="capacity" required min="1">
+                                        <input type="number" class="form-control" name="capacity" required min="1" value="100">
                                     </div>
                                     <div class="mb-3">
-                                        <label class="form-label">Цена билета</label>
-                                        <input type="number" class="form-control" name="ticket_price" required min="0" step="0.01">
+                                        <label class="form-label">Цена билета (₽)</label>
+                                        <input type="number" class="form-control" name="ticket_price" required min="0" step="0.01" value="1000">
                                     </div>
                                     <button type="submit" class="btn btn-primary">Сохранить</button>
                                 </form>
@@ -158,6 +183,7 @@ function initEventFormHandler() {
         
         const eventId = this.event_id.value;
         const formData = {
+            category_id: this.category_id.value ? parseInt(this.category_id.value) : null,
             title: this.title.value,
             description: this.description.value,
             event_date: new Date(this.event_date.value).toISOString(),
@@ -172,13 +198,13 @@ function initEventFormHandler() {
                     method: 'PUT',
                     body: JSON.stringify(formData)
                 });
-                showSuccess('Event updated successfully');
+                showSuccess('Мероприятие успешно обновлено');
             } else {
                 await apiRequest('/events', {
                     method: 'POST',
                     body: JSON.stringify(formData)
                 });
-                showSuccess('Event created successfully');
+                showSuccess('Мероприятие успешно создано');
             }
             
             $('#eventModal').modal('hide');
@@ -191,11 +217,20 @@ function initEventFormHandler() {
 }
 
 // Show create event modal
-function showCreateEventModal() {
+async function showCreateEventModal() {
     const modal = $('#eventModal');
-    modal.find('.modal-title').text('Create Event');
+    modal.find('.modal-title').text('Создать мероприятие');
     modal.find('form')[0].reset();
     modal.find('[name="event_id"]').val('');
+    
+    // Set default values
+    const now = new Date();
+    now.setHours(now.getHours() + 1);
+    modal.find('[name="event_date"]').val(now.toISOString().slice(0, 16));
+    modal.find('[name="duration"]').val('120');
+    modal.find('[name="capacity"]').val('100');
+    modal.find('[name="ticket_price"]').val('1000');
+    
     modal.modal('show');
 }
 
@@ -205,14 +240,19 @@ async function showEditEventModal(eventId) {
         const event = await apiRequest(`/events/${eventId}`);
         
         const modal = $('#eventModal');
-        modal.find('.modal-title').text('Edit Event');
+        modal.find('.modal-title').text('Редактировать мероприятие');
         
         const form = modal.find('form')[0];
         form.event_id.value = eventId;
+        form.category_id.value = event.category_id || '';
         form.title.value = event.title;
         form.description.value = event.description;
         form.event_date.value = new Date(event.event_date).toISOString().slice(0, 16);
-        form.duration.value = event.duration.minutes || 60;
+        
+        // Parse duration from interval format
+        const durationMatch = event.duration?.match(/(\d+)/);
+        form.duration.value = durationMatch ? durationMatch[1] : 120;
+        
         form.capacity.value = event.capacity;
         form.ticket_price.value = event.ticket_price;
         
@@ -224,7 +264,7 @@ async function showEditEventModal(eventId) {
 
 // Delete event
 async function deleteEvent(eventId) {
-    if (!confirm('Are you sure you want to delete this event?')) {
+    if (!confirm('Вы уверены, что хотите удалить это мероприятие?')) {
         return;
     }
     
@@ -233,7 +273,7 @@ async function deleteEvent(eventId) {
             method: 'DELETE'
         });
         
-        showSuccess('Event deleted successfully');
+        showSuccess('Мероприятие успешно удалено');
         loadEvents();
     } catch (error) {
         // Error is handled by apiRequest
@@ -250,33 +290,36 @@ async function showBookingModal(eventId) {
                 <div class="modal-dialog modal-lg">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <h5 class="modal-title">Book Tickets - ${event.title}</h5>
+                            <h5 class="modal-title">Бронирование билетов - ${event.title}</h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                         </div>
                         <div class="modal-body">
                             <div class="row">
                                 <div class="col-md-8">
-                                    <h6>Select Zone</h6>
+                                    <h6>Выберите зону</h6>
                                     <div class="list-group mb-3">
                                         ${event.zones.map(zone => `
-                                            <button type="button" class="list-group-item list-group-item-action"
-                                                    onclick="selectZone(${zone.zone_id}, ${event.event_id})">
+                                            <button type="button" class="list-group-item list-group-item-action ${zone.available_seats === 0 ? 'disabled' : ''}"
+                                                    onclick="selectZone(${zone.zone_id}, ${event.event_id})"
+                                                    ${zone.available_seats === 0 ? 'disabled' : ''}>
                                                 ${zone.zone_name}
-                                                <span class="badge bg-primary float-end">
-                                                    ${zone.available_seats} seats available
+                                                <span class="badge ${zone.available_seats === 0 ? 'bg-danger' : 'bg-primary'} float-end">
+                                                    ${zone.available_seats} мест свободно
                                                 </span>
                                             </button>
                                         `).join('')}
                                     </div>
+                                    <div id="seatSelection"></div>
                                 </div>
                                 <div class="col-md-4">
                                     <div class="card">
                                         <div class="card-body">
-                                            <h6>Booking Summary</h6>
-                                            <p class="mb-1">Date: ${formatDate(event.event_date)}</p>
-                                            <p class="mb-1">Price: ${formatPrice(event.ticket_price)}</p>
+                                            <h6>Сводка бронирования</h6>
+                                            <p class="mb-1"><strong>Дата:</strong> ${formatDate(event.event_date)}</p>
+                                            <p class="mb-1"><strong>Цена:</strong> ${formatPrice(event.ticket_price)}</p>
+                                            <p class="mb-3"><strong>Выбранное место:</strong> <span id="selectedSeatInfo">Не выбрано</span></p>
                                             <button class="btn btn-primary w-100 mt-3" id="confirmBookingBtn" disabled>
-                                                Confirm Booking
+                                                Подтвердить бронирование
                                             </button>
                                         </div>
                                     </div>
@@ -304,55 +347,73 @@ async function selectZone(zoneId, eventId) {
     try {
         const response = await apiRequest(`/events/${eventId}/seats?zone_id=${zoneId}`);
         
-        const seatsContainer = $('<div class="seat-map mt-3"></div>');
-        seatsContainer.css('grid-template-columns', `repeat(${Math.ceil(Math.sqrt(response.seats.length))}, 1fr)`);
+        let html = `
+            <h6 class="mt-3">Выберите место</h6>
+            <div class="seat-legend mb-3">
+                <small class="text-muted">
+                    <span class="badge bg-secondary me-2">Свободно</span>
+                    <span class="badge bg-success me-2">Выбрано</span>
+                    <span class="badge bg-danger">Занято</span>
+                </small>
+            </div>
+            <div class="seat-map">
+        `;
         
         response.seats.forEach(seat => {
-            const seatElement = $(`
+            html += `
                 <div class="seat ${seat.is_booked ? 'booked' : 'available'}"
-                     data-seat-id="${seat.seat_id}">
+                     data-seat-id="${seat.seat_id}"
+                     data-seat-number="${seat.seat_number}">
                     ${seat.seat_number}
                 </div>
-            `);
-            
-            if (!seat.is_booked) {
-                seatElement.click(function() {
-                    $('.seat').removeClass('selected');
-                    $(this).addClass('selected');
-                    $('#confirmBookingBtn').prop('disabled', false);
-                });
-            }
-            
-            seatsContainer.append(seatElement);
+            `;
         });
         
-        $('.seat-map').remove();
-        $('.list-group').after(seatsContainer);
+        html += '</div>';
         
-        // Update confirm booking button handler
-        $('#confirmBookingBtn').off('click').on('click', async function() {
-            const selectedSeat = $('.seat.selected');
-            if (selectedSeat.length === 0) return;
+        $('#seatSelection').html(html);
+        
+        // Add seat selection handlers
+        $('.seat.available').click(function() {
+            $('.seat').removeClass('selected');
+            $(this).addClass('selected');
             
-            try {
-                const booking = await apiRequest('/bookings', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        event_id: eventId,
-                        seat_id: selectedSeat.data('seat-id')
-                    })
-                });
-                
-                // Show payment modal
-                showPaymentModal(booking.booking_id);
-            } catch (error) {
-                // Error is handled by apiRequest
-            }
+            const seatNumber = $(this).data('seat-number');
+            $('#selectedSeatInfo').text(`Место ${seatNumber}`);
+            $('#confirmBookingBtn').prop('disabled', false);
+            
+            // Store selected seat data
+            $('#confirmBookingBtn').data('seat-id', $(this).data('seat-id'));
+            $('#confirmBookingBtn').data('event-id', eventId);
         });
+        
     } catch (error) {
         // Error is handled by apiRequest
     }
 }
+
+// Confirm booking button handler (initialize once)
+$(document).on('click', '#confirmBookingBtn', async function() {
+    const seatId = $(this).data('seat-id');
+    const eventId = $(this).data('event-id');
+    
+    if (!seatId || !eventId) return;
+    
+    try {
+        const booking = await apiRequest('/bookings', {
+            method: 'POST',
+            body: JSON.stringify({
+                event_id: eventId,
+                seat_id: seatId
+            })
+        });
+        
+        // Show payment modal
+        showPaymentModal(booking.booking_id);
+    } catch (error) {
+        // Error is handled by apiRequest
+    }
+});
 
 // Show payment modal
 function showPaymentModal(bookingId) {
@@ -363,20 +424,30 @@ function showPaymentModal(bookingId) {
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title">Payment Simulation</h5>
+                        <h5 class="modal-title">
+                            <i class="fas fa-credit-card me-2"></i>Симуляция оплаты
+                        </h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle me-2"></i>
+                            Это демонстрационная система. Реальные платежи не осуществляются.
+                        </div>
                         <form id="paymentForm">
                             <div class="mb-3">
-                                <label class="form-label">Payment Method</label>
+                                <label class="form-label">Способ оплаты</label>
                                 <select class="form-select" name="payment_method" required>
-                                    <option value="credit_card">Credit Card</option>
-                                    <option value="debit_card">Debit Card</option>
+                                    <option value="credit_card">Кредитная карта</option>
+                                    <option value="debit_card">Дебетовая карта</option>
                                     <option value="paypal">PayPal</option>
+                                    <option value="apple_pay">Apple Pay</option>
+                                    <option value="google_pay">Google Pay</option>
                                 </select>
                             </div>
-                            <button type="submit" class="btn btn-primary">Process Payment</button>
+                            <button type="submit" class="btn btn-success w-100">
+                                <i class="fas fa-check me-1"></i>Обработать платеж
+                            </button>
                         </form>
                     </div>
                 </div>
@@ -405,10 +476,10 @@ function showPaymentModal(bookingId) {
             });
             
             $('#paymentModal').modal('hide');
-            showSuccess('Booking confirmed successfully');
+            showSuccess('Бронирование успешно подтверждено!');
             navigateTo('my-bookings');
         } catch (error) {
             // Error is handled by apiRequest
         }
     });
-} 
+}

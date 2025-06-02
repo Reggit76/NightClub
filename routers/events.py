@@ -3,12 +3,12 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta
 from database import get_db_cursor
-from utils.auth import get_current_user, check_role
+from utils.auth import get_current_user, check_role, verify_csrf
 
 router = APIRouter()
 
 class EventCreate(BaseModel):
-    category_id: int
+    category_id: Optional[int] = None
     title: str
     description: str
     event_date: datetime
@@ -17,12 +17,19 @@ class EventCreate(BaseModel):
     ticket_price: float
 
 class EventUpdate(BaseModel):
-    title: Optional[str]
-    description: Optional[str]
-    event_date: Optional[datetime]
-    duration: Optional[int]
-    capacity: Optional[int]
-    ticket_price: Optional[float]
+    title: Optional[str] = None
+    description: Optional[str] = None
+    event_date: Optional[datetime] = None
+    duration: Optional[int] = None
+    capacity: Optional[int] = None
+    ticket_price: Optional[float] = None
+
+@router.get("/categories")
+async def get_categories():
+    with get_db_cursor() as cur:
+        cur.execute("SELECT * FROM event_categories ORDER BY name")
+        categories = cur.fetchall()
+        return categories
 
 @router.get("/")
 async def get_events(
@@ -31,14 +38,9 @@ async def get_events(
     date_to: Optional[datetime] = None
 ):
     with get_db_cursor() as cur:
-        # First, check if we have any events at all
-        cur.execute("SELECT COUNT(*) as count FROM events")
-        if cur.fetchone()["count"] == 0:
-            return []
-
         query = """
             SELECT e.*, c.name as category_name,
-                   (SELECT COUNT(*) FROM bookings b WHERE b.event_id = e.event_id) as booked_seats
+                   (SELECT COUNT(*) FROM bookings b WHERE b.event_id = e.event_id AND b.status = 'confirmed') as booked_seats
             FROM events e
             LEFT JOIN event_categories c ON e.category_id = c.category_id
             WHERE e.event_date >= NOW()
@@ -64,9 +66,18 @@ async def get_events(
 @router.post("/", status_code=201)
 async def create_event(
     event: EventCreate,
-    current_user: dict = Depends(check_role(["admin", "moderator"]))
+    current_user: dict = Depends(verify_csrf())
 ):
+    # Check if user has admin or moderator role
+    if current_user["role"] not in ["admin", "moderator"]:
+        raise HTTPException(status_code=403, detail="Operation not permitted")
     with get_db_cursor(commit=True) as cur:
+        # Validate category if provided
+        if event.category_id:
+            cur.execute("SELECT * FROM event_categories WHERE category_id = %s", (event.category_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=400, detail="Invalid category")
+        
         cur.execute(
             """
             INSERT INTO events (category_id, title, description, event_date, duration,
@@ -85,8 +96,11 @@ async def create_event(
 async def update_event(
     event_id: int,
     event: EventUpdate,
-    current_user: dict = Depends(check_role(["admin", "moderator"]))
+    current_user: dict = Depends(verify_csrf())
 ):
+    # Check if user has admin or moderator role
+    if current_user["role"] not in ["admin", "moderator"]:
+        raise HTTPException(status_code=403, detail="Operation not permitted")
     with get_db_cursor(commit=True) as cur:
         # Check if event exists
         cur.execute("SELECT * FROM events WHERE event_id = %s", (event_id,))
@@ -123,21 +137,7 @@ async def get_event(event_id: int):
         cur.execute(
             """
             SELECT e.*, c.name as category_name,
-                   (SELECT COUNT(*) FROM bookings b WHERE b.event_id = e.event_id) as booked_seats,
-                   (SELECT json_agg(json_build_object(
-                       'zone_id', z.zone_id,
-                       'zone_name', z.name,
-                       'available_seats', z.capacity - COALESCE(b.booked_count, 0)
-                   ))
-                    FROM club_zones z
-                    LEFT JOIN (
-                        SELECT s.zone_id, COUNT(*) as booked_count
-                        FROM bookings b
-                        JOIN seats s ON b.seat_id = s.seat_id
-                        WHERE b.event_id = e.event_id
-                        GROUP BY s.zone_id
-                    ) b ON z.zone_id = b.zone_id
-                   ) as zones
+                   (SELECT COUNT(*) FROM bookings b WHERE b.event_id = e.event_id AND b.status = 'confirmed') as booked_seats
             FROM events e
             LEFT JOIN event_categories c ON e.category_id = c.category_id
             WHERE e.event_id = %s
@@ -147,13 +147,64 @@ async def get_event(event_id: int):
         event = cur.fetchone()
         if not event:
             raise HTTPException(status_code=404, detail="Event not found")
-        return event
+            
+        # Get zones info
+        cur.execute(
+            """
+            SELECT z.zone_id, z.name as zone_name, z.capacity,
+                   z.capacity - COALESCE(b.booked_count, 0) as available_seats
+            FROM club_zones z
+            LEFT JOIN (
+                SELECT s.zone_id, COUNT(*) as booked_count
+                FROM bookings b
+                JOIN seats s ON b.seat_id = s.seat_id
+                WHERE b.event_id = %s AND b.status = 'confirmed'
+                GROUP BY s.zone_id
+            ) b ON z.zone_id = b.zone_id
+            ORDER BY z.zone_id
+            """,
+            (event_id,)
+        )
+        zones = cur.fetchall()
+        
+        return {**event, "zones": zones}
+
+@router.get("/{event_id}/seats")
+async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
+    with get_db_cursor() as cur:
+        # Check if event exists
+        cur.execute("SELECT * FROM events WHERE event_id = %s", (event_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Event not found")
+            
+        # Get seats for the zone
+        query = """
+            SELECT s.seat_id, s.seat_number, s.zone_id,
+                   CASE WHEN b.booking_id IS NOT NULL THEN true ELSE false END as is_booked
+            FROM seats s
+            LEFT JOIN bookings b ON s.seat_id = b.seat_id AND b.event_id = %s AND b.status = 'confirmed'
+        """
+        params = [event_id]
+        
+        if zone_id:
+            query += " WHERE s.zone_id = %s"
+            params.append(zone_id)
+            
+        query += " ORDER BY s.seat_number"
+        
+        cur.execute(query, params)
+        seats = cur.fetchall()
+        
+        return {"seats": seats}
 
 @router.delete("/{event_id}")
 async def delete_event(
     event_id: int,
-    current_user: dict = Depends(check_role(["admin", "moderator"]))
+    current_user: dict = Depends(verify_csrf())
 ):
+    # Check if user has admin or moderator role
+    if current_user["role"] not in ["admin", "moderator"]:
+        raise HTTPException(status_code=403, detail="Operation not permitted")
     with get_db_cursor(commit=True) as cur:
         # Check if event exists and has no bookings
         cur.execute(
@@ -175,4 +226,4 @@ async def delete_event(
             raise HTTPException(status_code=400, detail="Cannot delete event with existing bookings")
             
         cur.execute("DELETE FROM events WHERE event_id = %s", (event_id,))
-        return {"message": "Event deleted successfully"} 
+        return {"message": "Event deleted successfully"}

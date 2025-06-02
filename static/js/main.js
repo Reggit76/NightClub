@@ -1,6 +1,7 @@
 // API configuration
 const API_URL = '/api/v1';
 let currentUser = null;
+let csrfToken = null;
 
 // Router configuration
 const routes = {
@@ -19,7 +20,7 @@ function showError(message) {
         <div class="toast-container">
             <div class="toast show" role="alert">
                 <div class="toast-header bg-danger text-white">
-                    <strong class="me-auto">Error</strong>
+                    <strong class="me-auto">Ошибка</strong>
                     <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
                 </div>
                 <div class="toast-body">${message}</div>
@@ -37,7 +38,7 @@ function showSuccess(message) {
         <div class="toast-container">
             <div class="toast show" role="alert">
                 <div class="toast-header bg-success text-white">
-                    <strong class="me-auto">Success</strong>
+                    <strong class="me-auto">Успех</strong>
                     <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
                 </div>
                 <div class="toast-body">${message}</div>
@@ -68,6 +69,26 @@ function formatPrice(price) {
     }).format(price);
 }
 
+// Get CSRF token
+async function getCsrfToken() {
+    if (!csrfToken && localStorage.getItem('token')) {
+        try {
+            const response = await fetch(`${API_URL}/csrf-token`, {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                csrfToken = data.csrf_token;
+            }
+        } catch (error) {
+            console.warn('Failed to get CSRF token:', error);
+        }
+    }
+    return csrfToken;
+}
+
 // API request helper
 async function apiRequest(endpoint, options = {}) {
     const token = localStorage.getItem('token');
@@ -77,6 +98,14 @@ async function apiRequest(endpoint, options = {}) {
             ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         }
     };
+    
+    // Add CSRF token for state-changing requests
+    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(options.method?.toUpperCase())) {
+        const csrf = await getCsrfToken();
+        if (csrf) {
+            defaultOptions.headers['X-CSRF-Token'] = csrf;
+        }
+    }
     
     try {
         const response = await fetch(`${API_URL}${endpoint}`, {
@@ -88,12 +117,23 @@ async function apiRequest(endpoint, options = {}) {
             }
         });
         
+        if (response.status === 401) {
+            // Если получили 401, значит токен истек или недействителен
+            localStorage.removeItem('token');
+            currentUser = null;
+            csrfToken = null;
+            updateAuthUI();
+            showError('Сессия истекла. Пожалуйста, войдите снова.');
+            return null;
+        }
+        
+        const data = await response.json();
+        
         if (!response.ok) {
-            const data = await response.json();
             throw new Error(data.detail || 'Что-то пошло не так');
         }
         
-        return await response.json();
+        return data;
     } catch (error) {
         showError(error.message);
         throw error;
@@ -102,6 +142,12 @@ async function apiRequest(endpoint, options = {}) {
 
 // Page navigation
 function navigateTo(page) {
+    // Проверяем доступ к странице
+    if (!canAccessPage(page)) {
+        showError('У вас нет доступа к этой странице');
+        return;
+    }
+
     showLoading();
     
     const route = routes[page];
@@ -119,6 +165,15 @@ function navigateTo(page) {
     $(`[data-page="${page}"]`).addClass('active');
 }
 
+// Check if user can access the page
+function canAccessPage(page) {
+    if (page === 'events') return true;
+    if (!currentUser) return false;
+    if (page === 'my-bookings') return true;
+    if (page === 'admin') return ['admin', 'moderator'].includes(currentUser.role);
+    return true;
+}
+
 // Handle browser navigation
 window.addEventListener('popstate', () => {
     const path = window.location.pathname.substring(1);
@@ -132,8 +187,15 @@ $(document).ready(function() {
     if (token) {
         try {
             const payload = JSON.parse(atob(token.split('.')[1]));
-            currentUser = payload;
-            updateAuthUI();
+            // Проверяем, не истек ли токен
+            if (payload.exp * 1000 > Date.now()) {
+                currentUser = payload;
+                updateAuthUI();
+                // Get CSRF token for authenticated users
+                getCsrfToken();
+            } else {
+                localStorage.removeItem('token');
+            }
         } catch (error) {
             localStorage.removeItem('token');
         }
@@ -157,12 +219,21 @@ function updateAuthUI() {
         $('.auth-buttons').addClass('d-none');
         $('.user-info').removeClass('d-none');
         $('.username').text(currentUser.username);
+        
+        // Show/hide auth-required elements
         $('.auth-required').show();
         
+        // Show/hide admin-only elements
         if (['admin', 'moderator'].includes(currentUser.role)) {
             $('.admin-only').show();
         } else {
             $('.admin-only').hide();
+        }
+        
+        // Если текущая страница недоступна, перенаправляем на главную
+        const currentPage = window.location.pathname.substring(1) || 'events';
+        if (!canAccessPage(currentPage)) {
+            navigateTo('events');
         }
     } else {
         $('.auth-buttons').removeClass('d-none');
@@ -170,4 +241,4 @@ function updateAuthUI() {
         $('.auth-required').hide();
         $('.admin-only').hide();
     }
-} 
+}
