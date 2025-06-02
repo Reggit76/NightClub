@@ -2,11 +2,17 @@
 async function loadEvents() {
     try {
         let events = [];
+        let categories = [];
+        
         try {
-            events = await apiRequest('/events');
+            [events, categories] = await Promise.all([
+                apiRequest('/events'),
+                apiRequest('/events/categories')
+            ]);
         } catch (error) {
             if (error.message.includes('404')) {
                 events = [];
+                categories = [];
             } else {
                 throw error;
             }
@@ -23,101 +29,278 @@ async function loadEvents() {
                 ${isAdminOrModerator ? `
                     <div class="col-auto">
                         <button class="btn btn-primary" onclick="showCreateEventModal()">
-                            <i class="fas fa-plus"></i> Создать мероприятие
+                            <i class="fas fa-plus me-1"></i>Создать мероприятие
                         </button>
                     </div>
                 ` : ''}
             </div>
-            <div class="row">
-                ${events.map(event => `
-                    <div class="col-md-4 mb-4">
-                        <div class="event-card">
-                            <h4>${event.title}</h4>
-                            <p class="text-muted">${formatDate(event.event_date)}</p>
-                            <p>${event.description}</p>
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span class="badge bg-primary">${event.category_name || 'Без категории'}</span>
-                                <span class="text-muted">${formatPrice(event.ticket_price)}</span>
-                            </div>
-                            <div class="mt-3">
-                                <div class="progress mb-2">
-                                    <div class="progress-bar" role="progressbar" 
-                                         style="width: ${(event.booked_seats / event.capacity * 100)}%">
+            
+            <!-- Filters -->
+            ${categories.length > 0 ? `
+                <div class="row mb-4">
+                    <div class="col">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6>Фильтры</h6>
+                                <div class="row">
+                                    <div class="col-md-4">
+                                        <select class="form-select" id="categoryFilter" onchange="filterEvents()">
+                                            <option value="">Все категории</option>
+                                            ${categories.map(cat => `
+                                                <option value="${cat.category_id}">${cat.name}</option>
+                                            `).join('')}
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <input type="date" class="form-control" id="dateFromFilter" onchange="filterEvents()">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <input type="date" class="form-control" id="dateToFilter" onchange="filterEvents()">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <button class="btn btn-outline-secondary w-100" onclick="clearFilters()">
+                                            Очистить
+                                        </button>
                                     </div>
                                 </div>
-                                <small class="text-muted">
-                                    ${event.booked_seats} из ${event.capacity} мест забронировано
-                                </small>
                             </div>
-                            ${currentUser ? `
-                                <button class="btn btn-primary mt-3 w-100" onclick="bookEvent(${event.event_id})">
-                                    Забронировать
-                                </button>
-                            ` : `
-                                <button class="btn btn-primary mt-3 w-100" onclick="showLoginPrompt()">
-                                    Войдите для бронирования
-                                </button>
-                            `}
                         </div>
                     </div>
-                `).join('')}
-            </div>
+                </div>
+            ` : ''}
+            
+            <div class="row" id="eventsContainer">
         `;
         
         if (events.length === 0) {
-            html = `
-                <div class="alert alert-info">
-                    Нет доступных мероприятий
+            html += `
+                <div class="col-12">
+                    <div class="alert alert-info text-center">
+                        <i class="fas fa-calendar-alt fa-2x mb-3"></i>
+                        <h5>Нет доступных мероприятий</h5>
+                        <p class="mb-0">В настоящее время нет запланированных мероприятий. Проверьте позже!</p>
+                    </div>
                 </div>
             `;
+        } else {
+            events.forEach(event => {
+                const occupancyPercentage = Math.round((event.booked_seats / event.capacity) * 100);
+                html += `
+                    <div class="col-lg-4 col-md-6 mb-4" data-category="${event.category_id || ''}" data-date="${event.event_date}">
+                        <div class="card event-card h-100">
+                            <div class="card-body d-flex flex-column">
+                                <h5 class="card-title">${event.title}</h5>
+                                <p class="card-text text-muted flex-grow-1">${event.description}</p>
+                                
+                                <div class="mt-auto">
+                                    <div class="row mb-3">
+                                        <div class="col">
+                                            <small class="text-muted">
+                                                <i class="fas fa-calendar me-1"></i>${formatDate(event.event_date)}
+                                            </small>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <span class="badge bg-primary">${event.category_name || 'Без категории'}</span>
+                                        <span class="fw-bold text-success">${formatPrice(event.ticket_price)}</span>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                            <small class="text-muted">Заполненность</small>
+                                            <small class="text-muted">${event.booked_seats}/${event.capacity}</small>
+                                        </div>
+                                        <div class="progress">
+                                            <div class="progress-bar ${occupancyPercentage > 80 ? 'bg-warning' : 'bg-success'}" 
+                                                 role="progressbar" style="width: ${occupancyPercentage}%">
+                                                ${occupancyPercentage}%
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="d-grid gap-2">
+                                        ${currentUser ? `
+                                            ${event.booked_seats >= event.capacity ? `
+                                                <button class="btn btn-secondary" disabled>
+                                                    <i class="fas fa-ban me-1"></i>Мест нет
+                                                </button>
+                                            ` : `
+                                                <button class="btn btn-primary" onclick="showBookingModal(${event.event_id})">
+                                                    <i class="fas fa-ticket-alt me-1"></i>Забронировать
+                                                </button>
+                                            `}
+                                        ` : `
+                                            <button class="btn btn-outline-primary" onclick="showLoginPrompt()">
+                                                <i class="fas fa-sign-in-alt me-1"></i>Войти для бронирования
+                                            </button>
+                                        `}
+                                        
+                                        ${isAdminOrModerator ? `
+                                            <div class="btn-group mt-2" role="group">
+                                                <button class="btn btn-sm btn-outline-secondary" onclick="showEditEventModal(${event.event_id})">
+                                                    <i class="fas fa-edit me-1"></i>Изменить
+                                                </button>
+                                                <button class="btn btn-sm btn-outline-danger" onclick="deleteEvent(${event.event_id})">
+                                                    <i class="fas fa-trash me-1"></i>Удалить
+                                                </button>
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
         }
         
+        html += '</div>';
         $('#content').html(html);
+        
+        // Store events data for filtering
+        window.eventsData = events;
+        window.categoriesData = categories;
+        
     } catch (error) {
-        showError('Не удалось загрузить мероприятия');
+        $('#content').html(`
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                Не удалось загрузить мероприятия. Пожалуйста, попробуйте позже.
+            </div>
+        `);
     }
+}
+
+// Filter events
+function filterEvents() {
+    const categoryFilter = document.getElementById('categoryFilter')?.value;
+    const dateFromFilter = document.getElementById('dateFromFilter')?.value;
+    const dateToFilter = document.getElementById('dateToFilter')?.value;
+    
+    const eventCards = document.querySelectorAll('[data-category]');
+    
+    eventCards.forEach(card => {
+        let show = true;
+        
+        // Category filter
+        if (categoryFilter && card.dataset.category !== categoryFilter) {
+            show = false;
+        }
+        
+        // Date filters
+        const eventDate = new Date(card.dataset.date);
+        if (dateFromFilter && eventDate < new Date(dateFromFilter)) {
+            show = false;
+        }
+        if (dateToFilter && eventDate > new Date(dateToFilter + 'T23:59:59')) {
+            show = false;
+        }
+        
+        card.style.display = show ? 'block' : 'none';
+    });
+}
+
+// Clear filters
+function clearFilters() {
+    const categoryFilter = document.getElementById('categoryFilter');
+    const dateFromFilter = document.getElementById('dateFromFilter');
+    const dateToFilter = document.getElementById('dateToFilter');
+    
+    if (categoryFilter) categoryFilter.value = '';
+    if (dateFromFilter) dateFromFilter.value = '';
+    if (dateToFilter) dateToFilter.value = '';
+    
+    filterEvents();
 }
 
 // Show create event modal
 function showCreateEventModal() {
     const modal = `
         <div class="modal fade" id="createEventModal" tabindex="-1">
-            <div class="modal-dialog">
+            <div class="modal-dialog modal-lg">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title">Создание мероприятия</h5>
+                        <h5 class="modal-title">
+                            <i class="fas fa-plus me-2"></i>Создание мероприятия
+                        </h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
-                        <form id="createEventForm" class="event-form" onsubmit="createEvent(event)">
-                            <div class="mb-3">
-                                <label class="form-label">Название</label>
-                                <input type="text" class="form-control" name="title" required>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Описание</label>
-                                <textarea class="form-control" name="description" rows="3" required></textarea>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Дата и время</label>
-                                <input type="datetime-local" class="form-control" name="event_date" required>
-                            </div>
+                        <form id="createEventForm">
                             <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <label class="form-label">Длительность (минуты)</label>
-                                    <input type="number" class="form-control" name="duration" required min="30">
+                                <div class="col-md-8">
+                                    <div class="mb-3">
+                                        <label class="form-label">Название мероприятия *</label>
+                                        <input type="text" class="form-control" name="title" required 
+                                               placeholder="Введите название мероприятия">
+                                    </div>
                                 </div>
-                                <div class="col-md-6 mb-3">
-                                    <label class="form-label">Вместимость</label>
-                                    <input type="number" class="form-control" name="capacity" required min="1">
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label class="form-label">Категория</label>
+                                        <select class="form-select" name="category_id">
+                                            <option value="">Без категории</option>
+                                            ${window.categoriesData ? window.categoriesData.map(cat => `
+                                                <option value="${cat.category_id}">${cat.name}</option>
+                                            `).join('') : ''}
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
+                            
                             <div class="mb-3">
-                                <label class="form-label">Стоимость билета</label>
-                                <input type="number" class="form-control" name="ticket_price" required min="0" step="0.01">
+                                <label class="form-label">Описание *</label>
+                                <textarea class="form-control" name="description" rows="3" required
+                                          placeholder="Опишите мероприятие"></textarea>
                             </div>
-                            <button type="submit" class="btn btn-primary">Создать</button>
+                            
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Дата и время *</label>
+                                        <input type="datetime-local" class="form-control" name="event_date" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Длительность (минуты) *</label>
+                                        <input type="number" class="form-control" name="duration" required 
+                                               min="30" value="120" placeholder="120">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Вместимость *</label>
+                                        <input type="number" class="form-control" name="capacity" required 
+                                               min="1" placeholder="Количество мест">
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Стоимость билета (₽) *</label>
+                                        <input type="number" class="form-control" name="ticket_price" required 
+                                               min="0" step="0.01" placeholder="0.00">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle me-2"></i>
+                                Все поля, отмеченные *, обязательны для заполнения.
+                            </div>
                         </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            Отмена
+                        </button>
+                        <button type="button" class="btn btn-primary" onclick="createEvent()">
+                            <i class="fas fa-save me-1"></i>Создать мероприятие
+                        </button>
                     </div>
                 </div>
             </div>
@@ -130,44 +313,90 @@ function showCreateEventModal() {
     // Add new modal to DOM and show it
     $('body').append(modal);
     $('#createEventModal').modal('show');
+    
+    // Set minimum date to tomorrow
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const minDate = tomorrow.toISOString().slice(0, 16);
+    document.querySelector('input[name="event_date"]').min = minDate;
 }
 
 // Create event
-async function createEvent(event) {
-    event.preventDefault();
-    
+async function createEvent() {
     const form = document.getElementById('createEventForm');
-    const formData = new FormData(form);
-    const submitBtn = form.querySelector('button[type="submit"]');
+    const submitBtn = event.target;
     const originalText = submitBtn.innerHTML;
+    
+    // Get form data
+    const formData = new FormData(form);
+    
+    // Validate required fields
+    const title = formData.get('title')?.trim();
+    const description = formData.get('description')?.trim();
+    const eventDate = formData.get('event_date');
+    const duration = parseInt(formData.get('duration'));
+    const capacity = parseInt(formData.get('capacity'));
+    const ticketPrice = parseFloat(formData.get('ticket_price'));
+    
+    if (!title || !description || !eventDate || !duration || !capacity || ticketPrice < 0) {
+        showError('Пожалуйста, заполните все обязательные поля');
+        return;
+    }
+    
+    // Additional validation
+    if (duration < 30) {
+        showError('Длительность мероприятия должна быть не менее 30 минут');
+        return;
+    }
+    
+    if (capacity < 1) {
+        showError('Вместимость должна быть больше 0');
+        return;
+    }
+    
+    const eventDateTime = new Date(eventDate);
+    if (eventDateTime <= new Date()) {
+        showError('Дата мероприятия должна быть в будущем');
+        return;
+    }
     
     try {
         // Disable submit button and show loading state
         submitBtn.disabled = true;
-        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Создание...';
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Создание...';
         
         // Check if user has permission
         if (!currentUser || !currentUser.role || !['admin', 'moderator'].includes(currentUser.role)) {
             throw new Error('У вас нет прав для создания мероприятий');
         }
         
+        const eventData = {
+            title: title,
+            description: description,
+            event_date: eventDateTime.toISOString(),
+            duration: duration,
+            capacity: capacity,
+            ticket_price: ticketPrice
+        };
+        
+        // Add category if selected
+        const categoryId = formData.get('category_id');
+        if (categoryId) {
+            eventData.category_id = parseInt(categoryId);
+        }
+        
         const response = await apiRequest('/events', {
             method: 'POST',
-            body: JSON.stringify({
-                title: formData.get('title'),
-                description: formData.get('description'),
-                event_date: formData.get('event_date'),
-                duration: parseInt(formData.get('duration')),
-                capacity: parseInt(formData.get('capacity')),
-                ticket_price: parseFloat(formData.get('ticket_price'))
-            })
+            body: JSON.stringify(eventData)
         });
         
         // Close modal and reload events
         $('#createEventModal').modal('hide');
         showSuccess('Мероприятие успешно создано');
         loadEvents();
+        
     } catch (error) {
+        console.error('Create event error:', error);
         showError(error.message || 'Не удалось создать мероприятие');
     } finally {
         // Restore submit button
@@ -176,95 +405,169 @@ async function createEvent(event) {
     }
 }
 
-// Book event
-async function bookEvent(eventId) {
-    try {
-        await apiRequest(`/bookings/book/${eventId}`, {
-            method: 'POST'
-        });
-        showSuccess('Бронирование успешно создано');
-        loadEvents();
-    } catch (error) {
-        showError('Не удалось забронировать мероприятие');
-    }
-}
-
-// Show login prompt
-function showLoginPrompt() {
-    $('#loginModal').modal('show');
-}
-
-// Event form handler
-function initEventFormHandler() {
-    $('#eventForm').submit(async function(e) {
-        e.preventDefault();
-        
-        const eventId = this.event_id.value;
-        const formData = {
-            category_id: this.category_id.value ? parseInt(this.category_id.value) : null,
-            title: this.title.value,
-            description: this.description.value,
-            event_date: new Date(this.event_date.value).toISOString(),
-            duration: parseInt(this.duration.value),
-            capacity: parseInt(this.capacity.value),
-            ticket_price: parseFloat(this.ticket_price.value)
-        };
-        
-        try {
-            if (eventId) {
-                await apiRequest(`/events/${eventId}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(formData)
-                });
-                showSuccess('Мероприятие успешно обновлено');
-            } else {
-                await apiRequest('/events', {
-                    method: 'POST',
-                    body: JSON.stringify(formData)
-                });
-                showSuccess('Мероприятие успешно создано');
-            }
-            
-            $('#eventModal').modal('hide');
-            this.reset();
-            loadEvents();
-        } catch (error) {
-            // Error is handled by apiRequest
-        }
-    });
-}
-
 // Show edit event modal
 async function showEditEventModal(eventId) {
     try {
         const event = await apiRequest(`/events/${eventId}`);
         
-        const modal = $('#eventModal');
-        modal.find('.modal-title').text('Редактировать мероприятие');
+        const modal = `
+            <div class="modal fade" id="editEventModal" tabindex="-1">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">
+                                <i class="fas fa-edit me-2"></i>Редактирование мероприятия
+                            </h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="editEventForm">
+                                <input type="hidden" name="event_id" value="${eventId}">
+                                
+                                <div class="row">
+                                    <div class="col-md-8">
+                                        <div class="mb-3">
+                                            <label class="form-label">Название мероприятия *</label>
+                                            <input type="text" class="form-control" name="title" required 
+                                                   value="${event.title}">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="mb-3">
+                                            <label class="form-label">Категория</label>
+                                            <select class="form-select" name="category_id">
+                                                <option value="">Без категории</option>
+                                                ${window.categoriesData ? window.categoriesData.map(cat => `
+                                                    <option value="${cat.category_id}" ${event.category_id === cat.category_id ? 'selected' : ''}>
+                                                        ${cat.name}
+                                                    </option>
+                                                `).join('') : ''}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label class="form-label">Описание *</label>
+                                    <textarea class="form-control" name="description" rows="3" required>${event.description}</textarea>
+                                </div>
+                                
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Дата и время *</label>
+                                            <input type="datetime-local" class="form-control" name="event_date" required 
+                                                   value="${new Date(event.event_date).toISOString().slice(0, 16)}">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Длительность (минуты) *</label>
+                                            <input type="number" class="form-control" name="duration" required 
+                                                   min="30" value="${event.duration ? event.duration.match(/\\d+/)?.[0] || 120 : 120}">
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Вместимость *</label>
+                                            <input type="number" class="form-control" name="capacity" required 
+                                                   min="1" value="${event.capacity}">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Стоимость билета (₽) *</label>
+                                            <input type="number" class="form-control" name="ticket_price" required 
+                                                   min="0" step="0.01" value="${event.ticket_price}">
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="alert alert-warning">
+                                    <i class="fas fa-exclamation-triangle me-2"></i>
+                                    Изменения затронут существующие бронирования. Будьте осторожны при изменении даты и вместимости.
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                                Отмена
+                            </button>
+                            <button type="button" class="btn btn-primary" onclick="updateEvent(${eventId})">
+                                <i class="fas fa-save me-1"></i>Сохранить изменения
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
         
-        const form = modal.find('form')[0];
-        form.event_id.value = eventId;
-        form.category_id.value = event.category_id || '';
-        form.title.value = event.title;
-        form.description.value = event.description;
-        form.event_date.value = new Date(event.event_date).toISOString().slice(0, 16);
+        // Remove existing modal if any
+        $('#editEventModal').remove();
         
-        // Parse duration from interval format
-        const durationMatch = event.duration?.match(/(\d+)/);
-        form.duration.value = durationMatch ? durationMatch[1] : 120;
+        // Add new modal to DOM and show it
+        $('body').append(modal);
+        $('#editEventModal').modal('show');
         
-        form.capacity.value = event.capacity;
-        form.ticket_price.value = event.ticket_price;
-        
-        modal.modal('show');
     } catch (error) {
-        // Error is handled by apiRequest
+        showError('Не удалось загрузить данные мероприятия');
+    }
+}
+
+// Update event
+async function updateEvent(eventId) {
+    const form = document.getElementById('editEventForm');
+    const submitBtn = event.target;
+    const originalText = submitBtn.innerHTML;
+    
+    // Get form data
+    const formData = new FormData(form);
+    
+    try {
+        // Disable submit button and show loading state
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Сохранение...';
+        
+        const eventData = {
+            title: formData.get('title').trim(),
+            description: formData.get('description').trim(),
+            event_date: new Date(formData.get('event_date')).toISOString(),
+            duration: parseInt(formData.get('duration')),
+            capacity: parseInt(formData.get('capacity')),
+            ticket_price: parseFloat(formData.get('ticket_price'))
+        };
+        
+        // Add category if selected
+        const categoryId = formData.get('category_id');
+        if (categoryId) {
+            eventData.category_id = parseInt(categoryId);
+        }
+        
+        await apiRequest(`/events/${eventId}`, {
+            method: 'PUT',
+            body: JSON.stringify(eventData)
+        });
+        
+        // Close modal and reload events
+        $('#editEventModal').modal('hide');
+        showSuccess('Мероприятие успешно обновлено');
+        loadEvents();
+        
+    } catch (error) {
+        showError(error.message || 'Не удалось обновить мероприятие');
+    } finally {
+        // Restore submit button
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalText;
     }
 }
 
 // Delete event
 async function deleteEvent(eventId) {
-    if (!confirm('Вы уверены, что хотите удалить это мероприятие?')) {
+    if (!confirm('Вы уверены, что хотите удалить это мероприятие? Это действие нельзя отменить.')) {
         return;
     }
     
@@ -276,50 +579,80 @@ async function deleteEvent(eventId) {
         showSuccess('Мероприятие успешно удалено');
         loadEvents();
     } catch (error) {
-        // Error is handled by apiRequest
+        showError(error.message || 'Не удалось удалить мероприятие');
     }
+}
+
+// Show login prompt
+function showLoginPrompt() {
+    $('#loginModal').modal('show');
 }
 
 // Show booking modal
 async function showBookingModal(eventId) {
     try {
-        const event = await apiRequest(`/events/${eventId}`);
+        const [event, zones] = await Promise.all([
+            apiRequest(`/events/${eventId}`),
+            apiRequest('/events/zones')
+        ]);
         
         let html = `
             <div class="modal fade" id="bookingModal" tabindex="-1">
-                <div class="modal-dialog modal-lg">
+                <div class="modal-dialog modal-xl">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <h5 class="modal-title">Бронирование билетов - ${event.title}</h5>
+                            <h5 class="modal-title">
+                                <i class="fas fa-ticket-alt me-2"></i>Бронирование билетов - ${event.title}
+                            </h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                         </div>
                         <div class="modal-body">
                             <div class="row">
-                                <div class="col-md-8">
+                                <div class="col-lg-8">
                                     <h6>Выберите зону</h6>
-                                    <div class="list-group mb-3">
-                                        ${event.zones.map(zone => `
-                                            <button type="button" class="list-group-item list-group-item-action ${zone.available_seats === 0 ? 'disabled' : ''}"
-                                                    onclick="selectZone(${zone.zone_id}, ${event.event_id})"
-                                                    ${zone.available_seats === 0 ? 'disabled' : ''}>
-                                                ${zone.zone_name}
-                                                <span class="badge ${zone.available_seats === 0 ? 'bg-danger' : 'bg-primary'} float-end">
-                                                    ${zone.available_seats} мест свободно
-                                                </span>
-                                            </button>
+                                    <div class="row" id="zoneSelection">
+                                        ${zones.map(zone => `
+                                            <div class="col-md-4 mb-3">
+                                                <div class="card zone-card ${zone.available_seats === 0 ? 'disabled' : 'selectable'}" 
+                                                     onclick="${zone.available_seats > 0 ? `selectZone(${zone.zone_id}, ${eventId})` : ''}"
+                                                     style="${zone.available_seats === 0 ? 'opacity: 0.5; cursor: not-allowed;' : 'cursor: pointer;'}">
+                                                    <div class="card-body text-center">
+                                                        <h6>${zone.name}</h6>
+                                                        <p class="text-muted mb-2">${zone.description || 'Стандартная зона'}</p>
+                                                        <span class="badge ${zone.available_seats === 0 ? 'bg-danger' : 'bg-primary'}">
+                                                            ${zone.available_seats} мест
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         `).join('')}
                                     </div>
                                     <div id="seatSelection"></div>
                                 </div>
-                                <div class="col-md-4">
-                                    <div class="card">
+                                <div class="col-lg-4">
+                                    <div class="card sticky-top" style="top: 20px;">
+                                        <div class="card-header">
+                                            <h6 class="mb-0">Сводка бронирования</h6>
+                                        </div>
                                         <div class="card-body">
-                                            <h6>Сводка бронирования</h6>
-                                            <p class="mb-1"><strong>Дата:</strong> ${formatDate(event.event_date)}</p>
-                                            <p class="mb-1"><strong>Цена:</strong> ${formatPrice(event.ticket_price)}</p>
-                                            <p class="mb-3"><strong>Выбранное место:</strong> <span id="selectedSeatInfo">Не выбрано</span></p>
-                                            <button class="btn btn-primary w-100 mt-3" id="confirmBookingBtn" disabled>
-                                                Подтвердить бронирование
+                                            <div class="mb-3">
+                                                <strong>Мероприятие:</strong><br>
+                                                <span class="text-muted">${event.title}</span>
+                                            </div>
+                                            <div class="mb-3">
+                                                <strong>Дата:</strong><br>
+                                                <span class="text-muted">${formatDate(event.event_date)}</span>
+                                            </div>
+                                            <div class="mb-3">
+                                                <strong>Цена:</strong><br>
+                                                <span class="text-success fs-5">${formatPrice(event.ticket_price)}</span>
+                                            </div>
+                                            <div class="mb-3">
+                                                <strong>Выбранное место:</strong><br>
+                                                <span id="selectedSeatInfo" class="text-muted">Не выбрано</span>
+                                            </div>
+                                            <button class="btn btn-primary w-100" id="confirmBookingBtn" disabled>
+                                                <i class="fas fa-check me-1"></i>Подтвердить бронирование
                                             </button>
                                         </div>
                                     </div>
@@ -337,8 +670,9 @@ async function showBookingModal(eventId) {
         // Add new modal to DOM and show it
         $('body').append(html);
         $('#bookingModal').modal('show');
+        
     } catch (error) {
-        // Error is handled by apiRequest
+        showError('Не удалось загрузить информацию о мероприятии');
     }
 }
 
@@ -348,13 +682,17 @@ async function selectZone(zoneId, eventId) {
         const response = await apiRequest(`/events/${eventId}/seats?zone_id=${zoneId}`);
         
         let html = `
-            <h6 class="mt-3">Выберите место</h6>
-            <div class="seat-legend mb-3">
-                <small class="text-muted">
-                    <span class="badge bg-secondary me-2">Свободно</span>
-                    <span class="badge bg-success me-2">Выбрано</span>
-                    <span class="badge bg-danger">Занято</span>
-                </small>
+            <h6 class="mt-4">Выберите место</h6>
+            <div class="seat-legend mb-3 text-center">
+                <span class="badge bg-light text-dark me-2">
+                    <i class="fas fa-square me-1"></i>Свободно
+                </span>
+                <span class="badge bg-success me-2">
+                    <i class="fas fa-square me-1"></i>Выбрано
+                </span>
+                <span class="badge bg-danger">
+                    <i class="fas fa-square me-1"></i>Занято
+                </span>
             </div>
             <div class="seat-map">
         `;
@@ -363,7 +701,8 @@ async function selectZone(zoneId, eventId) {
             html += `
                 <div class="seat ${seat.is_booked ? 'booked' : 'available'}"
                      data-seat-id="${seat.seat_id}"
-                     data-seat-number="${seat.seat_number}">
+                     data-seat-number="${seat.seat_number}"
+                     title="Место ${seat.seat_number}">
                     ${seat.seat_number}
                 </div>
             `;
@@ -379,7 +718,7 @@ async function selectZone(zoneId, eventId) {
             $(this).addClass('selected');
             
             const seatNumber = $(this).data('seat-number');
-            $('#selectedSeatInfo').text(`Место ${seatNumber}`);
+            $('#selectedSeatInfo').html(`<span class="text-primary">Место ${seatNumber}</span>`);
             $('#confirmBookingBtn').prop('disabled', false);
             
             // Store selected seat data
@@ -388,7 +727,7 @@ async function selectZone(zoneId, eventId) {
         });
         
     } catch (error) {
-        // Error is handled by apiRequest
+        showError('Не удалось загрузить места');
     }
 }
 
@@ -399,7 +738,13 @@ $(document).on('click', '#confirmBookingBtn', async function() {
     
     if (!seatId || !eventId) return;
     
+    const submitBtn = $(this);
+    const originalText = submitBtn.html();
+    
     try {
+        submitBtn.prop('disabled', true)
+                 .html('<i class="fas fa-spinner fa-spin me-1"></i>Бронирование...');
+        
         const booking = await apiRequest('/bookings', {
             method: 'POST',
             body: JSON.stringify({
@@ -408,78 +753,13 @@ $(document).on('click', '#confirmBookingBtn', async function() {
             })
         });
         
-        // Show payment modal
+        // Close booking modal and show payment modal
+        $('#bookingModal').modal('hide');
         showPaymentModal(booking.booking_id);
+        
     } catch (error) {
-        // Error is handled by apiRequest
+        showError(error.message || 'Не удалось создать бронирование');
+    } finally {
+        submitBtn.prop('disabled', false).html(originalText);
     }
 });
-
-// Show payment modal
-function showPaymentModal(bookingId) {
-    $('#bookingModal').modal('hide');
-    
-    const html = `
-        <div class="modal fade" id="paymentModal" tabindex="-1">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">
-                            <i class="fas fa-credit-card me-2"></i>Симуляция оплаты
-                        </h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="alert alert-info">
-                            <i class="fas fa-info-circle me-2"></i>
-                            Это демонстрационная система. Реальные платежи не осуществляются.
-                        </div>
-                        <form id="paymentForm">
-                            <div class="mb-3">
-                                <label class="form-label">Способ оплаты</label>
-                                <select class="form-select" name="payment_method" required>
-                                    <option value="credit_card">Кредитная карта</option>
-                                    <option value="debit_card">Дебетовая карта</option>
-                                    <option value="paypal">PayPal</option>
-                                    <option value="apple_pay">Apple Pay</option>
-                                    <option value="google_pay">Google Pay</option>
-                                </select>
-                            </div>
-                            <button type="submit" class="btn btn-success w-100">
-                                <i class="fas fa-check me-1"></i>Обработать платеж
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    // Remove existing modal if any
-    $('#paymentModal').remove();
-    
-    // Add new modal to DOM and show it
-    $('body').append(html);
-    $('#paymentModal').modal('show');
-    
-    // Payment form handler
-    $('#paymentForm').submit(async function(e) {
-        e.preventDefault();
-        
-        try {
-            await apiRequest('/bookings/pay', {
-                method: 'POST',
-                body: JSON.stringify({
-                    booking_id: bookingId,
-                    payment_method: this.payment_method.value
-                })
-            });
-            
-            $('#paymentModal').modal('hide');
-            showSuccess('Бронирование успешно подтверждено!');
-            navigateTo('my-bookings');
-        } catch (error) {
-            // Error is handled by apiRequest
-        }
-    });
-}

@@ -21,12 +21,12 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("🚀 Nightclub Booking System starting up...")
-    logger.info(f"📚 API Documentation available at: /docs")
-    logger.info(f"🔗 API Base URL: {API_PREFIX}")
+    logger.info("Nightclub Booking System starting up...")
+    logger.info(f"API Documentation available at: /docs")
+    logger.info(f"API Base URL: {API_PREFIX}")
     yield
     # Shutdown
-    logger.info("👋 Nightclub Booking System shutting down...")
+    logger.info("Nightclub Booking System shutting down...")
 
 app = FastAPI(
     title="NightClub Booking System",
@@ -67,11 +67,11 @@ try:
     from routers import auth, events, bookings, admin, profile
     
     # API routes
-    app.include_router(auth.router, prefix=f"{API_PREFIX}/auth", tags=["🔐 Authentication"])
-    app.include_router(events.router, prefix=f"{API_PREFIX}/events", tags=["🎪 Events"])
-    app.include_router(bookings.router, prefix=f"{API_PREFIX}/bookings", tags=["🎫 Bookings"])
-    app.include_router(admin.router, prefix=f"{API_PREFIX}/admin", tags=["👨‍💼 Administration"])
-    app.include_router(profile.router, prefix=f"{API_PREFIX}/profile", tags=["👤 User Profile"])
+    app.include_router(auth.router, prefix=f"{API_PREFIX}/auth", tags=["Authentication"])
+    app.include_router(events.router, prefix=f"{API_PREFIX}/events", tags=["Events"])
+    app.include_router(bookings.router, prefix=f"{API_PREFIX}/bookings", tags=["Bookings"])
+    app.include_router(admin.router, prefix=f"{API_PREFIX}/admin", tags=["Administration"])
+    app.include_router(profile.router, prefix=f"{API_PREFIX}/profile", tags=["User Profile"])
     
     logger.info("All routers loaded successfully")
 except ImportError as e:
@@ -110,6 +110,29 @@ async def get_system_info():
             "profile": f"{API_PREFIX}/profile"
         }
     }
+
+# Zones endpoint for events
+@app.get(f"{API_PREFIX}/events/zones")
+async def get_zones():
+    """Get all available zones"""
+    from database import get_db_cursor
+    
+    with get_db_cursor() as cur:
+        cur.execute("""
+            SELECT z.zone_id, z.name, z.description, z.capacity,
+                   COUNT(s.seat_id) as total_seats
+            FROM club_zones z
+            LEFT JOIN seats s ON z.zone_id = s.zone_id
+            GROUP BY z.zone_id, z.name, z.description, z.capacity
+            ORDER BY z.zone_id
+        """)
+        zones = cur.fetchall()
+        
+        # Add available seats count (this is a simplified version)
+        for zone in zones:
+            zone['available_seats'] = zone['total_seats']  # Simplified for demo
+        
+        return zones
 
 # Custom StaticFiles class to add no-cache headers
 class NoCacheStaticFiles(StaticFiles):

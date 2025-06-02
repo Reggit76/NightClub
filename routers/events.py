@@ -76,10 +76,31 @@ class EventUpdate(BaseModel):
 
 @router.get("/categories")
 async def get_categories():
+    """Get all event categories"""
     with get_db_cursor() as cur:
         cur.execute("SELECT * FROM event_categories ORDER BY name")
         categories = cur.fetchall()
         return categories
+
+@router.get("/zones")
+async def get_zones():
+    """Get all available zones with seat information"""
+    with get_db_cursor() as cur:
+        cur.execute("""
+            SELECT z.zone_id, z.name, z.description, z.capacity,
+                   COUNT(s.seat_id) as total_seats
+            FROM club_zones z
+            LEFT JOIN seats s ON z.zone_id = s.zone_id
+            GROUP BY z.zone_id, z.name, z.description, z.capacity
+            ORDER BY z.zone_id
+        """)
+        zones = cur.fetchall()
+        
+        # Add available seats count (simplified for demo)
+        for zone in zones:
+            zone['available_seats'] = zone['total_seats'] or 0
+        
+        return zones
 
 @router.get("/")
 async def get_events(
@@ -87,6 +108,7 @@ async def get_events(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None
 ):
+    """Get all events with optional filtering"""
     try:
         with get_db_cursor() as cur:
             query = """
@@ -112,7 +134,7 @@ async def get_events(
             
             cur.execute(query, params)
             events = cur.fetchall()
-            return JSONResponse(content=events)
+            return events
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -121,6 +143,7 @@ async def create_event(
     event: EventCreate,
     current_user: dict = Depends(verify_csrf())
 ):
+    """Create a new event"""
     # Check if user has admin or moderator role
     if not current_user.get("role") or current_user["role"] not in ["admin", "moderator"]:
         raise HTTPException(status_code=403, detail="Недостаточно прав для создания мероприятий")
@@ -158,14 +181,12 @@ async def create_event(
                 }
             )
             
-            return JSONResponse(
-                status_code=201,
-                content={
-                    **new_event,
-                    "booked_seats": 0,
-                    "message": "Мероприятие успешно создано"
-                }
-            )
+            return {
+                **new_event,
+                "booked_seats": 0,
+                "category_name": None,
+                "message": "Мероприятие успешно создано"
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -175,6 +196,7 @@ async def update_event(
     event: EventUpdate,
     current_user: dict = Depends(verify_csrf())
 ):
+    """Update an existing event"""
     # Check if user has admin or moderator role
     if not current_user.get("role") or current_user["role"] not in ["admin", "moderator"]:
         raise HTTPException(status_code=403, detail="Недостаточно прав для редактирования мероприятий")
@@ -209,7 +231,7 @@ async def update_event(
                         params.append(value)
             
             if not update_fields:
-                return JSONResponse(content={"message": "Нет данных для обновления"})
+                return {"message": "Нет данных для обновления"}
                 
             params.append(event_id)
             query = f"""
@@ -231,12 +253,13 @@ async def update_event(
                 }
             )
             
-            return JSONResponse(content=updated_event)
+            return updated_event
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{event_id}")
 async def get_event(event_id: int):
+    """Get a specific event by ID"""
     try:
         with get_db_cursor() as cur:
             cur.execute(
@@ -253,12 +276,13 @@ async def get_event(event_id: int):
             if not event:
                 raise HTTPException(status_code=404, detail="Мероприятие не найдено")
                 
-            return JSONResponse(content=event)
+            return event
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{event_id}/seats")
 async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
+    """Get available seats for an event, optionally filtered by zone"""
     try:
         with get_db_cursor() as cur:
             # Check if event exists and hasn't started
@@ -277,10 +301,13 @@ async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
                 
             # Get seats for the zone
             query = """
-                SELECT s.seat_id, s.seat_number, s.zone_id,
+                SELECT s.seat_id, s.seat_number, s.zone_id, z.name as zone_name,
                        CASE WHEN b.booking_id IS NOT NULL THEN true ELSE false END as is_booked
                 FROM seats s
-                LEFT JOIN bookings b ON s.seat_id = b.seat_id AND b.event_id = %s AND b.status = 'confirmed'
+                JOIN club_zones z ON s.zone_id = z.zone_id
+                LEFT JOIN bookings b ON s.seat_id = b.seat_id 
+                    AND b.event_id = %s 
+                    AND b.status IN ('confirmed', 'pending')
             """
             params = [event_id]
             
@@ -302,6 +329,7 @@ async def delete_event(
     event_id: int,
     current_user: dict = Depends(verify_csrf())
 ):
+    """Delete an event"""
     # Check if user has admin or moderator role
     if not current_user.get("role") or current_user["role"] not in ["admin", "moderator"]:
         raise HTTPException(status_code=403, detail="Недостаточно прав для удаления мероприятий")
@@ -313,7 +341,7 @@ async def delete_event(
                 """
                 SELECT e.*, COUNT(b.booking_id) as booking_count
                 FROM events e
-                LEFT JOIN bookings b ON e.event_id = b.event_id
+                LEFT JOIN bookings b ON e.event_id = b.event_id AND b.status IN ('confirmed', 'pending')
                 WHERE e.event_id = %s AND e.event_date > NOW()
                 GROUP BY e.event_id
                 """,
@@ -345,9 +373,89 @@ async def delete_event(
                 }
             )
             
-            return JSONResponse(
-                status_code=204,
-                content={"message": "Мероприятие успешно удалено"}
+            return {"message": "Мероприятие успешно удалено"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{event_id}/statistics")
+async def get_event_statistics(
+    event_id: int,
+    current_user: dict = Depends(check_role(["admin", "moderator"]))
+):
+    """Get detailed statistics for an event"""
+    try:
+        with get_db_cursor() as cur:
+            # Basic event info
+            cur.execute(
+                """
+                SELECT e.*, c.name as category_name
+                FROM events e
+                LEFT JOIN event_categories c ON e.category_id = c.category_id
+                WHERE e.event_id = %s
+                """,
+                (event_id,)
             )
+            event = cur.fetchone()
+            
+            if not event:
+                raise HTTPException(status_code=404, detail="Мероприятие не найдено")
+            
+            # Booking statistics
+            cur.execute(
+                """
+                SELECT 
+                    COUNT(*) as total_bookings,
+                    COUNT(CASE WHEN status = 'confirmed' THEN 1 END) as confirmed_bookings,
+                    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_bookings,
+                    COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_bookings
+                FROM bookings
+                WHERE event_id = %s
+                """,
+                (event_id,)
+            )
+            booking_stats = cur.fetchone()
+            
+            # Revenue statistics
+            cur.execute(
+                """
+                SELECT 
+                    COALESCE(SUM(t.amount), 0) as total_revenue,
+                    COUNT(t.transaction_id) as paid_transactions
+                FROM bookings b
+                LEFT JOIN transactions t ON b.booking_id = t.booking_id AND t.status = 'completed'
+                WHERE b.event_id = %s
+                """,
+                (event_id,)
+            )
+            revenue_stats = cur.fetchone()
+            
+            # Zone distribution
+            cur.execute(
+                """
+                SELECT 
+                    z.name as zone_name,
+                    COUNT(b.booking_id) as bookings_count,
+                    z.capacity as zone_capacity
+                FROM club_zones z
+                LEFT JOIN seats s ON z.zone_id = s.zone_id
+                LEFT JOIN bookings b ON s.seat_id = b.seat_id AND b.event_id = %s AND b.status = 'confirmed'
+                GROUP BY z.zone_id, z.name, z.capacity
+                ORDER BY z.zone_id
+                """,
+                (event_id,)
+            )
+            zone_stats = cur.fetchall()
+            
+            occupancy_rate = 0
+            if event["capacity"] > 0:
+                occupancy_rate = round((booking_stats["confirmed_bookings"] / event["capacity"]) * 100, 2)
+            
+            return {
+                "event": dict(event),
+                "bookings": dict(booking_stats),
+                "revenue": dict(revenue_stats),
+                "zones": [dict(zone) for zone in zone_stats],
+                "occupancy_rate": occupancy_rate
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
