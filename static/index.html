@@ -37,6 +37,8 @@
                             <span class="username"></span>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="#" data-page="profile">Профиль</a></li>
+                            <li><hr class="dropdown-divider"></li>
                             <li><a class="dropdown-item" href="#" onclick="logout()">Выйти</a></li>
                         </ul>
                     </div>
@@ -92,6 +94,16 @@
                             <label class="form-label">Email</label>
                             <input type="email" class="form-control" name="email" required>
                         </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Имя</label>
+                                <input type="text" class="form-control" name="first_name" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Фамилия</label>
+                                <input type="text" class="form-control" name="last_name" required>
+                            </div>
+                        </div>
                         <div class="mb-3">
                             <label class="form-label">Пароль</label>
                             <input type="password" class="form-control" name="password" required>
@@ -114,5 +126,6 @@
     <script src="/static/js/events.js"></script>
     <script src="/static/js/bookings.js"></script>
     <script src="/static/js/admin.js"></script>
+    <script src="/static/js/profile.js"></script>
 </body>
 </html>

@@ -3,7 +3,8 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import date
 from database import get_db_cursor
-from utils.auth import get_current_user, verify_password, get_password_hash
+from utils.auth import get_current_user, verify_password, get_password_hash, verify_csrf
+from utils.helpers import log_user_action
 
 router = APIRouter()
 
@@ -59,7 +60,7 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
 @router.put("/")
 async def update_profile(
     profile_update: ProfileUpdate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(verify_csrf())
 ):
     with get_db_cursor(commit=True) as cur:
         # Check if profile exists, if not create it
@@ -101,12 +102,21 @@ async def update_profile(
             """
             cur.execute(query, field_values)
         
+        # Log the action
+        log_user_action(
+            current_user["user_id"],
+            "update_profile",
+            {
+                "updated_fields": list(profile_update.dict(exclude_unset=True).keys())
+            }
+        )
+        
         return {"message": "Profile updated successfully"}
 
 @router.post("/change-password")
 async def change_password(
     password_data: PasswordChange,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(verify_csrf())
 ):
     with get_db_cursor(commit=True) as cur:
         # Get current password hash
@@ -124,6 +134,13 @@ async def change_password(
         cur.execute(
             "UPDATE users SET password_hash = %s WHERE user_id = %s",
             (new_password_hash, current_user["user_id"])
+        )
+        
+        # Log the action
+        log_user_action(
+            current_user["user_id"],
+            "change_password",
+            {"action": "Password changed successfully"}
         )
         
         return {"message": "Password changed successfully"}

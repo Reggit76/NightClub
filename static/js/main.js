@@ -7,7 +7,8 @@ let csrfToken = null;
 const routes = {
     'events': loadEvents,
     'my-bookings': loadMyBookings,
-    'admin': loadAdminPanel
+    'admin': loadAdminPanel,
+    'profile': loadProfile
 };
 
 // Utility functions
@@ -169,7 +170,7 @@ function navigateTo(page) {
 function canAccessPage(page) {
     if (page === 'events') return true;
     if (!currentUser) return false;
-    if (page === 'my-bookings') return true;
+    if (page === 'my-bookings' || page === 'profile') return true;
     if (page === 'admin') return ['admin', 'moderator'].includes(currentUser.role);
     return true;
 }
@@ -201,11 +202,22 @@ $(document).ready(function() {
         }
     }
     
-    // Navigation event handlers
+    // Navigation event handlers for navbar links
     $('.nav-link').click(function(e) {
         e.preventDefault();
         const page = $(this).data('page');
-        navigateTo(page);
+        if (page) {
+            navigateTo(page);
+        }
+    });
+    
+    // Navigation event handlers for dropdown links
+    $(document).on('click', '.dropdown-item[data-page]', function(e) {
+        e.preventDefault();
+        const page = $(this).data('page');
+        if (page) {
+            navigateTo(page);
+        }
     });
     
     // Initial page load based on URL
@@ -240,5 +252,11 @@ function updateAuthUI() {
         $('.user-info').addClass('d-none');
         $('.auth-required').hide();
         $('.admin-only').hide();
+        
+        // Если находимся на странице, требующей авторизации, перенаправляем на главную
+        const currentPage = window.location.pathname.substring(1) || 'events';
+        if (!canAccessPage(currentPage)) {
+            navigateTo('events');
+        }
     }
 }

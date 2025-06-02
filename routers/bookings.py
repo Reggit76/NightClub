@@ -1,211 +1,112 @@
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
+from pydantic import BaseModel, EmailStr
+from utils.auth import verify_password, get_password_hash, create_access_token, generate_csrf_token
 from database import get_db_cursor
-from utils.auth import get_current_user, verify_csrf
+from email_validator import validate_email, EmailNotValidError
 
 router = APIRouter()
 
-class BookingCreate(BaseModel):
-    event_id: int
-    seat_id: int
+class UserLogin(BaseModel):
+    username: str
+    password: str
 
-class PaymentSimulation(BaseModel):
-    booking_id: int
-    payment_method: str
+class UserRegister(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+    first_name: str
+    last_name: str
 
-@router.post("/", status_code=201)
-async def create_booking(
-    booking: BookingCreate,
-    current_user: dict = Depends(verify_csrf())
-):
-    with get_db_cursor(commit=True) as cur:
-        # Check if event exists and has available capacity
-        cur.execute(
-            """
-            SELECT e.*, 
-                   (SELECT COUNT(*) FROM bookings b WHERE b.event_id = e.event_id AND b.status = 'confirmed') as booked_seats
-            FROM events e
-            WHERE e.event_id = %s
-            """,
-            (booking.event_id,)
-        )
-        event = cur.fetchone()
+@router.post("/login")
+async def login(user_data: UserLogin):
+    with get_db_cursor() as cur:
+        # Check if login is email or username
+        if "@" in user_data.username:
+            # Login with email
+            cur.execute(
+                "SELECT user_id, username, password_hash, role, is_active FROM users WHERE email = %s",
+                (user_data.username,)
+            )
+        else:
+            # Login with username
+            cur.execute(
+                "SELECT user_id, username, password_hash, role, is_active FROM users WHERE username = %s",
+                (user_data.username,)
+            )
         
-        if not event:
-            raise HTTPException(status_code=404, detail="Event not found")
-            
-        if event["booked_seats"] >= event["capacity"]:
-            raise HTTPException(status_code=400, detail="Event is fully booked")
-            
-        # Check if seat is available
-        cur.execute(
-            """
-            SELECT s.*, b.booking_id
-            FROM seats s
-            LEFT JOIN bookings b ON s.seat_id = b.seat_id AND b.event_id = %s AND b.status IN ('confirmed', 'pending')
-            WHERE s.seat_id = %s
-            """,
-            (booking.event_id, booking.seat_id)
-        )
-        seat = cur.fetchone()
+        user = cur.fetchone()
         
-        if not seat:
-            raise HTTPException(status_code=404, detail="Seat not found")
-            
-        if seat["booking_id"]:
-            raise HTTPException(status_code=400, detail="Seat is already booked")
-            
-        # Check if user already has a booking for this event
-        cur.execute(
-            """
-            SELECT booking_id FROM bookings 
-            WHERE user_id = %s AND event_id = %s AND status IN ('confirmed', 'pending')
-            """,
-            (current_user["user_id"], booking.event_id)
-        )
-        existing_booking = cur.fetchone()
+        if not user or not verify_password(user_data.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
         
-        if existing_booking:
-            raise HTTPException(status_code=400, detail="You already have a booking for this event")
-            
-        # Create booking
-        cur.execute(
-            """
-            INSERT INTO bookings (user_id, event_id, seat_id, status)
-            VALUES (%s, %s, %s, 'pending')
-            RETURNING booking_id
-            """,
-            (current_user["user_id"], booking.event_id, booking.seat_id)
-        )
-        booking_id = cur.fetchone()["booking_id"]
+        if not user["is_active"]:
+            raise HTTPException(status_code=401, detail="Account is disabled")
+        
+        token_data = {
+            "user_id": user["user_id"],
+            "username": user["username"],
+            "role": user["role"]
+        }
+        
+        # Generate access token
+        access_token = create_access_token(token_data)
+        
+        # Generate CSRF token
+        csrf_token = generate_csrf_token(user["user_id"])
         
         return {
-            "booking_id": booking_id,
-            "message": "Booking created successfully, waiting for payment"
+            "access_token": access_token,
+            "token_type": "bearer",
+            "csrf_token": csrf_token,
+            "user": {
+                "user_id": user["user_id"],
+                "username": user["username"],
+                "role": user["role"]
+            }
         }
 
-@router.post("/pay")
-async def simulate_payment(
-    payment: PaymentSimulation,
-    current_user: dict = Depends(verify_csrf())
-):
+@router.post("/register")
+async def register(user_data: UserRegister):
+    try:
+        validate_email(user_data.email)
+    except EmailNotValidError:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    # Basic password validation
+    if len(user_data.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
+
     with get_db_cursor(commit=True) as cur:
-        # Check if booking exists and belongs to user
+        # Check if username or email already exists
+        cur.execute(
+            "SELECT username, email FROM users WHERE username = %s OR email = %s",
+            (user_data.username, user_data.email)
+        )
+        existing_user = cur.fetchone()
+        if existing_user:
+            if existing_user["username"] == user_data.username:
+                raise HTTPException(status_code=400, detail="Username already registered")
+            else:
+                raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create new user
         cur.execute(
             """
-            SELECT b.*, e.ticket_price
-            FROM bookings b
-            JOIN events e ON b.event_id = e.event_id
-            WHERE b.booking_id = %s AND b.user_id = %s
+            INSERT INTO users (username, email, password_hash, role)
+            VALUES (%s, %s, %s, 'user')
+            RETURNING user_id
             """,
-            (payment.booking_id, current_user["user_id"])
+            (user_data.username, user_data.email, get_password_hash(user_data.password))
         )
-        booking = cur.fetchone()
+        user_id = cur.fetchone()["user_id"]
         
-        if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found")
-            
-        if booking["status"] != "pending":
-            raise HTTPException(status_code=400, detail="Booking is not in pending status")
-            
-        # Simulate payment transaction
+        # Create user profile
         cur.execute(
             """
-            INSERT INTO transactions (booking_id, user_id, amount, payment_method, status)
-            VALUES (%s, %s, %s, %s, 'completed')
+            INSERT INTO user_profiles (user_id, first_name, last_name)
+            VALUES (%s, %s, %s)
             """,
-            (payment.booking_id, current_user["user_id"], booking["ticket_price"],
-             payment.payment_method)
+            (user_id, user_data.first_name, user_data.last_name)
         )
         
-        # Update booking status
-        cur.execute(
-            """
-            UPDATE bookings
-            SET status = 'confirmed'
-            WHERE booking_id = %s
-            """,
-            (payment.booking_id,)
-        )
-        
-        return {"message": "Payment processed successfully"}
-
-@router.get("/my-bookings")
-async def get_user_bookings(current_user: dict = Depends(get_current_user)):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT b.*, e.title as event_title, e.event_date,
-                   e.ticket_price, s.seat_number, z.name as zone_name,
-                   t.status as payment_status, t.payment_method
-            FROM bookings b
-            JOIN events e ON b.event_id = e.event_id
-            JOIN seats s ON b.seat_id = s.seat_id
-            JOIN club_zones z ON s.zone_id = z.zone_id
-            LEFT JOIN transactions t ON b.booking_id = t.booking_id
-            WHERE b.user_id = %s
-            ORDER BY e.event_date DESC
-            """,
-            (current_user["user_id"],)
-        )
-        bookings = cur.fetchall()
-        return bookings
-
-@router.get("/{booking_id}")
-async def get_booking_details(
-    booking_id: int,
-    current_user: dict = Depends(get_current_user)
-):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT b.*, e.title as event_title, e.event_date, e.description,
-                   e.ticket_price, e.duration, s.seat_number, z.name as zone_name,
-                   t.status as payment_status, t.payment_method, t.transaction_date
-            FROM bookings b
-            JOIN events e ON b.event_id = e.event_id
-            JOIN seats s ON b.seat_id = s.seat_id
-            JOIN club_zones z ON s.zone_id = z.zone_id
-            LEFT JOIN transactions t ON b.booking_id = t.booking_id
-            WHERE b.booking_id = %s AND b.user_id = %s
-            """,
-            (booking_id, current_user["user_id"])
-        )
-        booking = cur.fetchone()
-        
-        if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found")
-            
-        return booking
-
-@router.delete("/{booking_id}")
-async def cancel_booking(
-    booking_id: int,
-    current_user: dict = Depends(verify_csrf())
-):
-    with get_db_cursor(commit=True) as cur:
-        # Check if booking exists and belongs to user
-        cur.execute(
-            """
-            SELECT b.*, e.event_date
-            FROM bookings b
-            JOIN events e ON b.event_id = e.event_id
-            WHERE b.booking_id = %s AND b.user_id = %s
-            """,
-            (booking_id, current_user["user_id"])
-        )
-        booking = cur.fetchone()
-        
-        if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found")
-            
-        if booking["event_date"] <= datetime.now():
-            raise HTTPException(status_code=400, detail="Cannot cancel past events")
-            
-        # Delete booking and related transaction
-        cur.execute("DELETE FROM transactions WHERE booking_id = %s", (booking_id,))
-        cur.execute("DELETE FROM bookings WHERE booking_id = %s", (booking_id,))
-        
-        return {"message": "Booking cancelled successfully"}
+        return {"message": "User registered successfully"}

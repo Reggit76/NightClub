@@ -4,6 +4,7 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 from database import get_db_cursor
 from utils.auth import get_current_user, check_role, verify_csrf
+from utils.helpers import log_user_action
 
 router = APIRouter()
 
@@ -71,6 +72,7 @@ async def create_event(
     # Check if user has admin or moderator role
     if current_user["role"] not in ["admin", "moderator"]:
         raise HTTPException(status_code=403, detail="Operation not permitted")
+        
     with get_db_cursor(commit=True) as cur:
         # Validate category if provided
         if event.category_id:
@@ -90,6 +92,19 @@ async def create_event(
              current_user["user_id"])
         )
         event_id = cur.fetchone()["event_id"]
+        
+        # Log the action
+        log_user_action(
+            current_user["user_id"],
+            "create_event",
+            {
+                "event_id": event_id,
+                "title": event.title,
+                "event_date": event.event_date.isoformat(),
+                "capacity": event.capacity
+            }
+        )
+        
         return {"event_id": event_id, "message": "Event created successfully"}
 
 @router.put("/{event_id}")
@@ -101,6 +116,7 @@ async def update_event(
     # Check if user has admin or moderator role
     if current_user["role"] not in ["admin", "moderator"]:
         raise HTTPException(status_code=403, detail="Operation not permitted")
+        
     with get_db_cursor(commit=True) as cur:
         # Check if event exists
         cur.execute("SELECT * FROM events WHERE event_id = %s", (event_id,))
@@ -128,6 +144,16 @@ async def update_event(
             WHERE event_id = %s
         """
         cur.execute(query, params)
+        
+        # Log the action
+        log_user_action(
+            current_user["user_id"],
+            "update_event",
+            {
+                "event_id": event_id,
+                "updated_fields": list(event.dict(exclude_unset=True).keys())
+            }
+        )
         
         return {"message": "Event updated successfully"}
 
@@ -205,6 +231,7 @@ async def delete_event(
     # Check if user has admin or moderator role
     if current_user["role"] not in ["admin", "moderator"]:
         raise HTTPException(status_code=403, detail="Operation not permitted")
+        
     with get_db_cursor(commit=True) as cur:
         # Check if event exists and has no bookings
         cur.execute(
@@ -226,4 +253,15 @@ async def delete_event(
             raise HTTPException(status_code=400, detail="Cannot delete event with existing bookings")
             
         cur.execute("DELETE FROM events WHERE event_id = %s", (event_id,))
+        
+        # Log the action
+        log_user_action(
+            current_user["user_id"],
+            "delete_event",
+            {
+                "event_id": event_id,
+                "title": event.get("title", "Unknown")
+            }
+        )
+        
         return {"message": "Event deleted successfully"}

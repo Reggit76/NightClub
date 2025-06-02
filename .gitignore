@@ -1,10 +1,74 @@
-/.env
-/.venv
-/__pycache__
-utils/__pycache__/auth.cpython-312.pyc
-routers/__pycache__/admin.cpython-312.pyc
-routers/__pycache__/auth.cpython-312.pyc
-routers/__pycache__/bookings.cpython-312.pyc
-routers/__pycache__/events.cpython-312.pyc
-routers/__pycache__/profile.cpython-312.pyc
-utils/__pycache__/auth.cpython-312.pyc
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.python-version
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+log/
+
+# Database
+*.sqlite3
+*.db
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Node (если используется для фронтенда)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# pytest
+.pytest_cache/
+.pytest_cache/*
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Local development settings
+local_settings.py
+
+# Media and static files (если они генерируются)
+media/
+/static/admin/
+/static/rest_framework/
+*.pyc

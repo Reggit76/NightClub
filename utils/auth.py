@@ -80,6 +80,9 @@ def verify_csrf():
         if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
             csrf_token = request.headers.get("X-CSRF-Token")
             if not csrf_token:
+                # Don't require CSRF for auth endpoints
+                if str(request.url.path).endswith('/auth/login') or str(request.url.path).endswith('/auth/register'):
+                    return user
                 raise HTTPException(status_code=403, detail="CSRF token missing")
             
             if not verify_csrf_token(user["user_id"], csrf_token):

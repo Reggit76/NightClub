@@ -25,7 +25,7 @@ async function login(event) {
         
         // Store token and update UI
         localStorage.setItem('token', data.access_token);
-        currentUser = JSON.parse(atob(data.access_token.split('.')[1]));
+        currentUser = data.user || JSON.parse(atob(data.access_token.split('.')[1]));
         
         // Store CSRF token if provided
         if (data.csrf_token) {
@@ -67,6 +67,8 @@ async function register(event) {
             body: JSON.stringify({
                 username: formData.get('username'),
                 email: formData.get('email'),
+                first_name: formData.get('first_name'),
+                last_name: formData.get('last_name'),
                 password: formData.get('password')
             })
         });

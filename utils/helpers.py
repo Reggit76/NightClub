@@ -5,6 +5,7 @@ Helper utilities for the Nightclub Booking System
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import re
+import json
 from database import get_db_cursor
 
 def validate_phone_number(phone: str) -> bool:
@@ -208,7 +209,7 @@ def calculate_revenue_by_period(days: int = 30) -> Dict[str, Any]:
 def log_user_action(user_id: int, action: str, details: Optional[Dict[str, Any]] = None):
     """Log user action to audit_logs table"""
     with get_db_cursor(commit=True) as cur:
-        details_json = str(details) if details else None
+        details_json = json.dumps(details) if details else None
         cur.execute("""
             INSERT INTO audit_logs (user_id, action, details)
             VALUES (%s, %s, %s)
@@ -240,7 +241,7 @@ def send_email_notification(to_email: str, subject: str, message: str) -> bool:
     In production, integrate with email service like SendGrid, SES, etc.
     """
     # This is a mock implementation
-    print(f"📧 Email notification:")
+    print(f"Email notification:")
     print(f"To: {to_email}")
     print(f"Subject: {subject}")
     print(f"Message: {message}")
@@ -272,19 +273,19 @@ def generate_booking_confirmation_message(booking_id: int) -> str:
             return "Booking not found"
         
         return f"""
-        🎪 Подтверждение бронирования
+        Подтверждение бронирования
 
         Дорогой {booking['username']}!
 
         Ваше бронирование успешно подтверждено:
 
-        🎵 Мероприятие: {booking['event_title']}
-        📅 Дата: {booking['event_date'].strftime('%d.%m.%Y %H:%M')}
-        🎯 Зона: {booking['zone_name']}
-        💺 Место: {booking['seat_number']}
-        💰 Цена: {booking['ticket_price']} ₽
+        Мероприятие: {booking['event_title']}
+        Дата: {booking['event_date'].strftime('%d.%m.%Y %H:%M')}
+        Зона: {booking['zone_name']}
+        Место: {booking['seat_number']}
+        Цена: {booking['ticket_price']} ₽
 
-        📱 Номер бронирования: {booking['booking_id']}
+        Номер бронирования: {booking['booking_id']}
 
         Увидимся на мероприятии!
         """
@@ -302,6 +303,6 @@ def cleanup_expired_pending_bookings():
         
         deleted_count = cur.rowcount
         if deleted_count > 0:
-            print(f"🧹 Cleaned up {deleted_count} expired pending bookings")
+            print(f"Cleaned up {deleted_count} expired pending bookings")
         
         return deleted_count

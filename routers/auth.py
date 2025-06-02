@@ -20,10 +20,20 @@ class UserRegister(BaseModel):
 @router.post("/login")
 async def login(user_data: UserLogin):
     with get_db_cursor() as cur:
-        cur.execute(
-            "SELECT user_id, username, password_hash, role, is_active FROM users WHERE username = %s",
-            (user_data.username,)
-        )
+        # Check if login is email or username
+        if "@" in user_data.username:
+            # Login with email
+            cur.execute(
+                "SELECT user_id, username, password_hash, role, is_active FROM users WHERE email = %s",
+                (user_data.username,)
+            )
+        else:
+            # Login with username
+            cur.execute(
+                "SELECT user_id, username, password_hash, role, is_active FROM users WHERE username = %s",
+                (user_data.username,)
+            )
+        
         user = cur.fetchone()
         
         if not user or not verify_password(user_data.password, user["password_hash"]):

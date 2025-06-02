@@ -3,8 +3,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 from database import get_db_cursor
 from utils.auth import check_role, verify_csrf
+from utils.helpers import log_user_action
 from datetime import datetime
-import json
 
 router = APIRouter()
 
@@ -81,6 +81,7 @@ async def update_user(
     # Check if user has admin role
     if current_user["role"] not in ["admin"]:
         raise HTTPException(status_code=403, detail="Operation not permitted")
+    
     if user_id == current_user["user_id"]:
         raise HTTPException(status_code=400, detail="Невозможно изменить свою собственную роль")
         
@@ -116,22 +117,17 @@ async def update_user(
             params
         )
         
-        # Log the action
-        details_dict = {
+        # Log the action using the helper function
+        details = {
             "target_user_id": user_id,
             "new_role": user_update.role,
             "new_status": user_update.is_active
         }
         
-        cur.execute(
-            """
-            INSERT INTO audit_logs (user_id, action, details)
-            VALUES (%s, 'update_user_role', %s)
-            """,
-            (
-                current_user["user_id"],
-                json.dumps(details_dict)
-            )
+        log_user_action(
+            current_user["user_id"],
+            "update_user_role", 
+            details
         )
         
         return {"message": "Пользователь успешно обновлен"}
