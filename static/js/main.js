@@ -1,9 +1,7 @@
 // Improved main.js with better CSRF handling
 // API configuration
-const API_URL = '/api/v1';
+const API_URL = '';
 let currentUser = null;
-let csrfToken = null;
-let csrfTokenExpiry = null;
 
 // Add cache busting for development
 const CACHE_VERSION = Date.now();
@@ -95,74 +93,21 @@ function formatPrice(price) {
     }).format(price);
 }
 
-// Improved CSRF token management
-async function getCsrfToken(forceRefresh = false) {
-    const token = localStorage.getItem('token');
-    if (!token) {
-        console.log('No auth token, skipping CSRF');
-        return null;
-    }
-    
-    // Check if we have a valid CSRF token
-    if (!forceRefresh && csrfToken && csrfTokenExpiry && new Date() < csrfTokenExpiry) {
-        return csrfToken;
-    }
-    
-    try {
-        console.log('Fetching new CSRF token...');
-        const response = await fetch(`${API_URL}/csrf-token`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Cache-Control': 'no-cache'
-            }
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            csrfToken = data.csrf_token;
-            // Set expiry to 23 hours from now (tokens are valid for 24 hours)
-            csrfTokenExpiry = new Date(Date.now() + 23 * 60 * 60 * 1000);
-            console.log('CSRF token obtained successfully');
-            return csrfToken;
-        } else {
-            console.warn('Failed to get CSRF token:', response.status);
-            csrfToken = null;
-            csrfTokenExpiry = null;
-            return null;
-        }
-    } catch (error) {
-        console.warn('Failed to get CSRF token:', error);
-        csrfToken = null;
-        csrfTokenExpiry = null;
-        return null;
-    }
-}
-
-// Enhanced API request helper
+// Enhanced API request helper with session handling
 async function apiRequest(endpoint, options = {}) {
-    const token = localStorage.getItem('token');
     const defaultOptions = {
         headers: {
             'Content-Type': 'application/json',
             'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
+            'Pragma': 'no-cache'
+        },
+        credentials: 'include' // Important for sending cookies
     };
     
-    // Add CSRF token for state-changing requests
-    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(options.method?.toUpperCase())) {
-        // Skip CSRF for auth endpoints
-        if (!endpoint.includes('/auth/')) {
-            const csrf = await getCsrfToken();
-            if (csrf) {
-                defaultOptions.headers['X-CSRF-Token'] = csrf;
-                console.log('Added CSRF token to request');
-            } else {
-                console.warn('No CSRF token available for request');
-            }
-        }
+    // Add Authorization header if we have a token
+    const token = localStorage.getItem('access_token');
+    if (token) {
+        defaultOptions.headers['Authorization'] = `Bearer ${token}`;
     }
     
     try {
@@ -179,81 +124,50 @@ async function apiRequest(endpoint, options = {}) {
         
         // Handle specific status codes
         if (response.status === 401) {
-            if (!endpoint.includes('/auth/login')) {
-                console.log('Unauthorized - clearing auth data');
-                localStorage.removeItem('token');
-                currentUser = null;
-                csrfToken = null;
-                csrfTokenExpiry = null;
-                updateAuthUI();
-                showError('Сессия истекла. Пожалуйста, войдите снова.');
+            if (!endpoint.includes('/auth/')) {
+                console.log('Session expired - attempting to refresh...');
+                try {
+                    // Try to refresh session
+                    await apiRequest('/auth/refresh', { method: 'POST' });
+                    // Retry original request
+                    return await apiRequest(endpoint, options);
+                } catch (refreshError) {
+                    console.log('Session refresh failed - clearing auth data');
+                    currentUser = null;
+                    updateAuthUI();
+                    showError('Сессия истекла. Пожалуйста, войдите снова.');
+                }
             }
             throw new Error('Unauthorized');
         }
         
         if (response.status === 403) {
             const errorData = await response.json().catch(() => ({}));
-            const errorMessage = errorData.detail || 'У вас нет прав для выполнения этого действия';
-            
-            // If CSRF token is invalid, try to refresh it
-            if (errorMessage.includes('CSRF')) {
-                console.log('CSRF token invalid, refreshing...');
-                await getCsrfToken(true); // Force refresh
-                showError('Токен безопасности истек. Попробуйте еще раз.');
-            } else {
-                showError(errorMessage);
-            }
-            throw new Error('Forbidden');
+            throw new Error(errorData.detail || 'У вас нет прав для выполнения этого действия');
         }
         
-        if (response.status === 404) {
+        if (response.status === 500) {
             const errorData = await response.json().catch(() => ({}));
-            const errorMessage = errorData.detail || 'Запрашиваемый ресурс не найден';
-            showError(errorMessage);
-            throw new Error('Not Found');
+            throw new Error(errorData.detail || 'Внутренняя ошибка сервера');
         }
         
-        if (response.status === 422) {
-            const data = await response.json();
-            if (data.detail && Array.isArray(data.detail)) {
-                const errorMessages = data.detail.map(err => err.msg || err.message || 'Ошибка валидации');
-                showError(errorMessages.join(', '));
-            } else if (data.detail) {
-                showError(data.detail);
-            } else {
-                showError('Ошибка валидации данных');
-            }
-            throw new Error('Validation Error');
-        }
-        
-        if (response.status >= 500) {
-            showError('Внутренняя ошибка сервера. Попробуйте позже.');
-            throw new Error('Server Error');
-        }
-        
-        // Try to parse JSON response
-        let data;
+        // Parse JSON response
         const contentType = response.headers.get('content-type');
         if (contentType && contentType.includes('application/json')) {
-            data = await response.json();
-        } else {
-            data = await response.text();
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.detail || 'API request failed');
+            }
+            return data;
         }
         
         if (!response.ok) {
-            const errorMessage = typeof data === 'object' && data.detail ? data.detail : 'Что-то пошло не так';
-            showError(errorMessage);
-            throw new Error(errorMessage);
+            throw new Error('API request failed');
         }
         
-        return data;
+        return null;
     } catch (error) {
-        if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-            showError('Ошибка подключения к серверу. Проверьте интернет-соединение.');
-        } else if (!['Unauthorized', 'Forbidden', 'Not Found', 'Validation Error', 'Server Error'].includes(error.message)) {
-            console.error('API request error:', error);
-            showError(error.message || 'Произошла неизвестная ошибка');
-        }
+        console.error(`API error (${endpoint}):`, error);
         throw error;
     }
 }
@@ -330,83 +244,41 @@ window.addEventListener('popstate', () => {
 
 // Enhanced authentication status check
 async function checkAuthStatus() {
-    console.log('Checking auth status...');
-    
-    const token = localStorage.getItem('token');
-    if (token) {
-        try {
-            // Split token and decode payload
-            const parts = token.split('.');
-            if (parts.length !== 3) {
-                throw new Error('Invalid token format');
-            }
+    try {
+        // Try to get session data
+        const sessionData = await apiRequest('/auth/session');
+        
+        if (sessionData) {
+            // Get full user info
+            const userInfo = await apiRequest('/auth/me');
             
-            const payload = JSON.parse(atob(parts[1]));
-            console.log('Token payload:', payload);
+            currentUser = {
+                user_id: userInfo.user_id,
+                username: userInfo.username,
+                email: userInfo.email,
+                first_name: userInfo.first_name,
+                last_name: userInfo.last_name,
+                role: userInfo.role,
+                is_active: userInfo.is_active
+            };
             
-            // Check if token is not expired (with 5 minute buffer)
-            const now = Math.floor(Date.now() / 1000);
-            const expiry = payload.exp;
-            
-            if (expiry && expiry > now + 300) { // 5 minute buffer
-                // Create user object with proper structure
-                currentUser = {
-                    user_id: payload.user_id || parseInt(payload.sub),
-                    username: payload.username,
-                    role: payload.role || 'user',
-                    sub: payload.sub
-                };
-                
-                console.log('User authenticated from token:', currentUser);
-                
-                // Try to get additional user info and refresh CSRF token
-                try {
-                    const [userInfo, csrfResponse] = await Promise.allSettled([
-                        apiRequest('/auth/me'),
-                        getCsrfToken()
-                    ]);
-                    
-                    if (userInfo.status === 'fulfilled' && userInfo.value.role) {
-                        currentUser.role = userInfo.value.role;
-                        currentUser.username = userInfo.value.username;
-                        currentUser.email = userInfo.value.email;
-                        currentUser.first_name = userInfo.value.first_name;
-                        currentUser.last_name = userInfo.value.last_name;
-                        console.log('User info updated from API:', currentUser);
-                    }
-                    
-                    if (csrfResponse.status === 'fulfilled') {
-                        console.log('CSRF token obtained during auth check');
-                    }
-                } catch (error) {
-                    console.warn('Could not fetch additional user info:', error);
-                }
-                
-                updateAuthUI();
-                
-            } else {
-                console.log('Token expired or about to expire, removing...');
-                localStorage.removeItem('token');
-                currentUser = null;
-                csrfToken = null;
-                csrfTokenExpiry = null;
-                updateAuthUI();
-            }
-        } catch (error) {
-            console.error('Invalid token, removing...', error);
-            localStorage.removeItem('token');
-            currentUser = null;
-            csrfToken = null;
-            csrfTokenExpiry = null;
+            console.log('Auth check successful, user:', currentUser);
             updateAuthUI();
+            return true;
         }
-    } else {
-        console.log('No token found');
-        currentUser = null;
-        csrfToken = null;
-        csrfTokenExpiry = null;
-        updateAuthUI();
+    } catch (error) {
+        console.warn('Auth check failed:', error);
+        if (error.message === 'Unauthorized') {
+            // Clear user data on auth failure
+            currentUser = null;
+            updateAuthUI();
+            // Don't show error for auth check
+            return false;
+        }
+        // For other errors, show them
+        showError(error.message);
     }
+    return false;
 }
 
 // Update UI based on authentication status
@@ -441,10 +313,6 @@ function updateAuthUI() {
         $('.auth-required').hide();
         $('.admin-only').hide();
         
-        // Clear CSRF token
-        csrfToken = null;
-        csrfTokenExpiry = null;
-        
         // If on a page requiring auth, redirect to events
         const currentPage = window.location.pathname.substring(1) || 'events';
         if (!canAccessPage(currentPage)) {
@@ -453,21 +321,25 @@ function updateAuthUI() {
     }
 }
 
-// Initialize app
-$(document).ready(function() {
-    console.log('Initializing Night Club Booking System...');
+// Initialize application
+async function initializeApp() {
+    console.log('Initializing application...');
     
-    // Wait a bit for all scripts to load, then initialize routes
-    setTimeout(function() {
-        initializeRoutes();
-        checkAuthStatus();
-        setupEventHandlers();
-        
-        // Initial page load based on URL
-        const path = window.location.pathname.substring(1);
-        navigateTo(path || 'events');
-    }, 100);
-});
+    // Check auth status
+    await checkAuthStatus();
+    
+    // Initialize routes
+    initializeRoutes();
+    
+    // Setup event handlers
+    setupEventHandlers();
+    
+    // Load initial page
+    const path = window.location.pathname.substring(1) || 'events';
+    navigateTo(path);
+    
+    console.log('Application initialized');
+}
 
 // Initialize routes after all scripts are loaded
 function initializeRoutes() {
@@ -537,14 +409,6 @@ function setupEventHandlers() {
     });
 }
 
-// Periodic CSRF token refresh (every 20 hours)
-setInterval(async () => {
-    if (currentUser && localStorage.getItem('token')) {
-        console.log('Refreshing CSRF token...');
-        await getCsrfToken(true);
-    }
-}, 20 * 60 * 60 * 1000); // 20 hours
-
 // Handle uncaught errors
 window.addEventListener('error', function(e) {
     console.error('Uncaught error:', e.error);
@@ -560,9 +424,18 @@ window.addEventListener('unhandledrejection', function(e) {
 window.debugNightClub = function() {
     console.log('=== DEBUG INFO ===');
     console.log('Current User:', currentUser);
-    console.log('CSRF Token:', csrfToken ? csrfToken.substring(0, 20) + '...' : null);
-    console.log('CSRF Expiry:', csrfTokenExpiry);
-    console.log('Auth Token:', localStorage.getItem('token') ? 'Present' : 'None');
     console.log('Routes:', Object.keys(routes));
     console.log('================');
 };
+
+// Initialize when document is ready
+$(document).ready(function() {
+    console.log('Document ready, initializing application...');
+    initializeApp();
+    
+    // Listen for auth state changes
+    onAuthStateChanged((user) => {
+        console.log('Auth state changed:', user);
+        updateAuthUI();
+    });
+});

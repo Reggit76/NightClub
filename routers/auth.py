@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Response
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from database import get_db_cursor
@@ -7,7 +7,7 @@ from utils.auth import (
     verify_password,
     create_access_token,
     get_current_user,
-    verify_csrf
+    decode_token
 )
 from utils.helpers import log_user_action
 from fastapi.responses import JSONResponse
@@ -59,7 +59,7 @@ async def register(user: UserRegister):
         )
         profile = cur.fetchone()
         
-        # Log the action directly using the same cursor
+        # Log the action
         details_json = json.dumps({
             "email": user.email,
             "username": user.username,
@@ -122,7 +122,7 @@ async def login(user: UserLogin):
             (db_user["user_id"], "login", details_json)
         )
         
-        return JSONResponse(
+        response = JSONResponse(
             content={
                 "access_token": token,
                 "token_type": "bearer",
@@ -136,48 +136,76 @@ async def login(user: UserLogin):
                 }
             }
         )
+        
+        # Set JWT token as httpOnly cookie
+        response.set_cookie(
+            key="nightclub_session",
+            value=token,
+            httponly=True,
+            max_age=24 * 60 * 60,  # 1 day
+            samesite="lax",
+            secure=False  # Set to True in production with HTTPS
+        )
+        
+        return response
 
 @router.post("/logout")
-async def logout(current_user: dict = Depends(verify_csrf())):
-    with get_db_cursor(commit=True) as cur:
-        # Log the action
-        details_json = json.dumps({"username": current_user.get("username")})
-        cur.execute(
-            """
-            INSERT INTO audit_logs (user_id, action, details)
-            VALUES (%s, %s, %s)
-            """,
-            (current_user["user_id"], "logout", details_json)
-        )
-    
-    return JSONResponse(content={"message": "Successfully logged out"})
+async def logout():
+    response = JSONResponse(content={"message": "Successfully logged out"})
+    response.delete_cookie(key="nightclub_session")
+    return response
+
+@router.get("/session")
+async def get_session(current_user: dict = Depends(get_current_user)):
+    return current_user
 
 @router.get("/me")
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
-    with get_db_cursor() as cur:
-        # Get user and profile data using user_id from token
-        user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
-        
-        cur.execute(
-            """
-            SELECT u.*, p.first_name, p.last_name
-            FROM users u
-            LEFT JOIN user_profiles p ON u.user_id = p.user_id
-            WHERE u.user_id = %s
-            """,
-            (user_id,)
-        )
-        user_data = cur.fetchone()
-        
-        if not user_data:
-            raise HTTPException(status_code=404, detail="User not found")
+    try:
+        with get_db_cursor() as cur:
+            # Get user and profile data using user_id from token
+            user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
             
-        return JSONResponse(content={
-            "user_id": user_data["user_id"],
-            "email": user_data["email"],
-            "username": user_data["username"],
-            "first_name": user_data["first_name"],
-            "last_name": user_data["last_name"],
-            "role": user_data["role"],
-            "is_active": user_data["is_active"]
-        })
+            cur.execute(
+                """
+                SELECT u.*, p.first_name, p.last_name
+                FROM users u
+                LEFT JOIN user_profiles p ON u.user_id = p.user_id
+                WHERE u.user_id = %s AND u.is_active = true
+                """,
+                (user_id,)
+            )
+            user_data = cur.fetchone()
+            
+            if not user_data:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Get user statistics
+            cur.execute(
+                """
+                SELECT 
+                    COUNT(*) as total_bookings,
+                    COUNT(CASE WHEN status = 'confirmed' THEN 1 END) as active_bookings,
+                    COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_bookings
+                FROM bookings 
+                WHERE user_id = %s
+                """,
+                (user_id,)
+            )
+            stats = cur.fetchone()
+            
+            return {
+                "user_id": user_data["user_id"],
+                "email": user_data["email"],
+                "username": user_data["username"],
+                "first_name": user_data["first_name"],
+                "last_name": user_data["last_name"],
+                "role": user_data["role"],
+                "stats": stats
+            }
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get user info: {str(e)}"
+        )

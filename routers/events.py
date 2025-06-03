@@ -1,12 +1,14 @@
 # routers/events.py - Enhanced with zone support and status management
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel, validator
 from typing import Optional, List
 from datetime import datetime, timedelta
 from database import get_db_cursor
-from utils.auth import get_current_user, check_role, verify_csrf
-from utils.helpers import log_user_action
+from utils.auth import get_current_user, check_role, verifier, SessionData
+from utils.helpers import log_user_action, log_api_request
 from fastapi.responses import JSONResponse
+import traceback
+import pytz
 
 router = APIRouter()
 
@@ -28,71 +30,29 @@ class EventZoneConfig(BaseModel):
         return v
 
 class EventCreate(BaseModel):
-    category_id: Optional[int] = None
+    category_id: int
     title: str
     description: str
     event_date: datetime
     duration: int  # in minutes
-    zones: List[EventZoneConfig]  # Zone configuration
-    status: Optional[str] = 'planned'  # planned, active, cancelled
-    
+    zones: List[EventZoneConfig]
+    status: str = "draft"  # draft, published, cancelled
+
     @validator('event_date')
     def validate_event_date(cls, v):
-        if v <= datetime.now():
-            raise ValueError('Дата мероприятия должна быть в будущем')
-        return v
-    
-    @validator('duration')
-    def validate_duration(cls, v):
-        if v < 30:
-            raise ValueError('Длительность должна быть не менее 30 минут')
-        return v
-    
-    @validator('zones')
-    def validate_zones(cls, v):
-        if not v:
-            raise ValueError('Необходимо указать хотя бы одну зону')
-        
-        zone_ids = [zone.zone_id for zone in v]
-        if len(zone_ids) != len(set(zone_ids)):
-            raise ValueError('Зоны не должны повторяться')
-        
-        return v
-    
-    @validator('status')
-    def validate_status(cls, v):
-        allowed_statuses = ['planned', 'active', 'cancelled']
-        if v not in allowed_statuses:
-            raise ValueError(f'Статус должен быть одним из: {", ".join(allowed_statuses)}')
+        # Ensure the datetime is timezone-aware
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=pytz.UTC)
         return v
 
 class EventUpdate(BaseModel):
+    category_id: Optional[int] = None
     title: Optional[str] = None
     description: Optional[str] = None
     event_date: Optional[datetime] = None
-    duration: Optional[int] = None
+    duration: Optional[int] = None  # in minutes
     zones: Optional[List[EventZoneConfig]] = None
     status: Optional[str] = None
-    
-    @validator('event_date')
-    def validate_event_date(cls, v):
-        if v and v <= datetime.now():
-            raise ValueError('Дата мероприятия должна быть в будущем')
-        return v
-    
-    @validator('duration')
-    def validate_duration(cls, v):
-        if v and v < 30:
-            raise ValueError('Длительность должна быть не менее 30 минут')
-        return v
-    
-    @validator('status')
-    def validate_status(cls, v):
-        if v:
-            allowed_statuses = ['planned', 'active', 'cancelled']
-            if v not in allowed_statuses:
-                raise ValueError(f'Статус должен быть одним из: {", ".join(allowed_statuses)}')
-        return v
 
 class EventStatusUpdate(BaseModel):
     status: str
@@ -105,21 +65,28 @@ class EventStatusUpdate(BaseModel):
         return v
 
 @router.get("/categories")
-async def get_categories():
+async def get_categories(request: Request):
     """Get all event categories"""
     try:
+        log_api_request("/events/categories", "GET")
+        
         with get_db_cursor() as cur:
             cur.execute("SELECT * FROM event_categories ORDER BY name")
             categories = cur.fetchall()
-            return [dict(cat) for cat in categories]
+            result = [dict(cat) for cat in categories]
+            
+            log_api_request("/events/categories", "GET", body={"count": len(result)})
+            return result
     except Exception as e:
-        print(f"Error getting categories: {str(e)}")
+        log_api_request("/events/categories", "GET", error=e)
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.get("/zones")
-async def get_zones():
+async def get_zones(request: Request):
     """Get all available zones with seat information"""
     try:
+        log_api_request("/events/zones", "GET")
+        
         with get_db_cursor() as cur:
             cur.execute("""
                 SELECT z.zone_id, z.name, z.description, z.capacity,
@@ -130,204 +97,258 @@ async def get_zones():
                 ORDER BY z.zone_id
             """)
             zones = cur.fetchall()
+            result = [dict(zone) for zone in zones]
             
-            result = []
-            for zone in zones:
-                zone_dict = dict(zone)
-                result.append(zone_dict)
-            
+            log_api_request("/events/zones", "GET", body={"count": len(result)})
             return result
     except Exception as e:
-        print(f"Error getting zones: {str(e)}")
+        log_api_request("/events/zones", "GET", error=e)
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.get("/")
-async def get_events(
+async def list_events(
+    request: Request,
     category: Optional[int] = None,
+    status: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
-    status: Optional[str] = Query(None, description="Event status filter"),
-    include_all: Optional[bool] = Query(False, description="Include all events regardless of date"),
-    current_user: Optional[dict] = Depends(get_current_user)
+    page: int = Query(1, gt=0),
+    limit: int = Query(10, gt=0, le=100)
 ):
-    """Get events with optional filtering"""
+    """List events with optional filters"""
     try:
+        params = {
+            "category": category,
+            "status": status,
+            "date_from": date_from,
+            "date_to": date_to,
+            "page": page,
+            "limit": limit
+        }
+        log_api_request("/events/", "GET", params=params)
+        
         with get_db_cursor() as cur:
-            # Base query
-            query = """
-                SELECT e.*, c.name as category_name,
-                       COALESCE(
-                           (SELECT COUNT(*) FROM bookings b 
-                            WHERE b.event_id = e.event_id AND b.status = 'confirmed'), 
-                           0
-                       ) as booked_seats
-                FROM events e
-                LEFT JOIN event_categories c ON e.category_id = c.category_id
-                WHERE 1=1
-            """
-            params = []
-            
-            # Date filtering - show future events by default, unless include_all is True
-            if not include_all:
-                query += " AND e.event_date >= NOW()"
-            
-            # Status filtering - by default show only active events for regular users
-            if status:
-                query += " AND e.status = %s"
-                params.append(status)
-            elif not current_user or current_user.get('role') not in ['admin', 'moderator']:
-                # Regular users see only active events
-                query += " AND e.status = 'active'"
-            # Admins and moderators see all events by default
+            # Build query conditions
+            conditions = []
+            query_params = []
             
             if category:
-                query += " AND e.category_id = %s"
-                params.append(category)
+                conditions.append("e.category_id = %s")
+                query_params.append(category)
+            
+            if status:
+                conditions.append("e.status = %s")
+                query_params.append(status)
+            
             if date_from:
-                query += " AND e.event_date >= %s"
-                params.append(date_from)
+                conditions.append("e.event_date >= %s")
+                query_params.append(date_from)
+            
             if date_to:
-                query += " AND e.event_date <= %s"
-                params.append(date_to)
-                
-            query += " ORDER BY e.event_date"
+                conditions.append("e.event_date <= %s")
+                query_params.append(date_to)
             
-            cur.execute(query, params)
-            events = cur.fetchall()
+            # Calculate offset
+            offset = (page - 1) * limit
+            query_params.extend([limit, offset])
             
-            result = []
-            for event in events:
-                event_dict = dict(event)
-                event_dict['booked_seats'] = int(event_dict.get('booked_seats', 0))
-                
-                # Get zone configurations for the event
-                cur.execute("""
-                    SELECT ez.*, z.name as zone_name, z.description as zone_description
-                    FROM event_zones ez
-                    JOIN club_zones z ON ez.zone_id = z.zone_id
-                    WHERE ez.event_id = %s
-                    ORDER BY z.name
-                """, (event_dict['event_id'],))
-                
-                zones = cur.fetchall()
-                event_dict['zones'] = [dict(zone) for zone in zones]
-                
-                result.append(event_dict)
+            # Build WHERE clause
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
             
-            return result
+            try:
+                # Get total count
+                count_query = f"""
+                    SELECT COUNT(*) as total
+                    FROM events e
+                    WHERE {where_clause}
+                """
+                cur.execute(count_query, query_params[:-2] if query_params else None)
+                total = cur.fetchone()["total"]
+                
+                # Get paginated events with zone info
+                query = f"""
+                    SELECT 
+                        e.*,
+                        json_agg(
+                            json_build_object(
+                                'zone_id', ez.zone_id,
+                                'zone_name', z.name,
+                                'available_seats', ez.available_seats,
+                                'zone_price', ez.zone_price
+                            )
+                        ) as zones
+                    FROM events e
+                    LEFT JOIN event_zones ez ON e.event_id = ez.event_id
+                    LEFT JOIN club_zones z ON ez.zone_id = z.zone_id
+                    WHERE {where_clause}
+                    GROUP BY e.event_id
+                    ORDER BY e.event_date ASC
+                    LIMIT %s OFFSET %s
+                """
+                cur.execute(query, query_params)
+                events = cur.fetchall()
+                
+                result = {
+                    "total": total,
+                    "page": page,
+                    "limit": limit,
+                    "events": events
+                }
+                
+                log_api_request("/events/", "GET", params=params, body={
+                    "total": total,
+                    "returned": len(events),
+                    "page": page
+                })
+                
+                return result
+                
+            except Exception as e:
+                log_api_request("/events/", "GET", params=params, error=e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Database query error: {str(e)}\nQuery: {query}\nParams: {query_params}"
+                )
+                
     except Exception as e:
-        print(f"Error in get_events: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        log_api_request("/events/", "GET", params=params, error=e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list events: {str(e)}\n{traceback.format_exc()}"
+        )
 
 @router.post("/", status_code=201)
 async def create_event(
+    request: Request,
     event: EventCreate,
-    current_user: dict = Depends(verify_csrf())
+    session: SessionData = Depends(verifier)
 ):
     """Create a new event with zone configuration"""
-    print(f"=== CREATE EVENT WITH ZONES ===")
-    print(f"Request data: {event.dict()}")
-    print(f"Creating event by user: {current_user}")
-    
-    # Check if user has admin or moderator role
-    user_role = current_user.get("role")
-    print(f"User role: {user_role}")
-    
-    if not user_role or user_role not in ["admin", "moderator"]:
-        print(f"User role check failed. User role: {user_role}")
-        raise HTTPException(status_code=403, detail="Недостаточно прав для создания мероприятий")
-        
     try:
+        log_api_request("/events/", "POST", 
+                       body=event,
+                       user_id=session.user_id,
+                       session_id=str(getattr(request.state, "session_id", None)))
+        
         with get_db_cursor(commit=True) as cur:
-            # Validate category if provided
-            if event.category_id:
-                print(f"Checking category: {event.category_id}")
-                cur.execute("SELECT * FROM event_categories WHERE category_id = %s", (event.category_id,))
-                category = cur.fetchone()
-                if not category:
-                    print(f"Category {event.category_id} not found")
-                    raise HTTPException(status_code=400, detail="Указанная категория не существует")
-                else:
-                    print(f"Category found: {dict(category)}")
-            
-            # Validate zones exist
-            zone_ids = [zone.zone_id for zone in event.zones]
-            cur.execute(
-                "SELECT zone_id FROM club_zones WHERE zone_id = ANY(%s)",
-                (zone_ids,)
-            )
-            existing_zones = [row['zone_id'] for row in cur.fetchall()]
-            
-            missing_zones = set(zone_ids) - set(existing_zones)
-            if missing_zones:
+            # Validate event date
+            now = datetime.now(pytz.UTC)
+            if event.event_date <= now:
                 raise HTTPException(
-                    status_code=400, 
-                    detail=f"Зоны не найдены: {missing_zones}"
+                    status_code=400,
+                    detail="Event date must be in the future"
                 )
             
-            # Calculate total capacity
-            total_capacity = sum(zone.available_seats for zone in event.zones)
+            # Validate duration
+            if event.duration <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Duration must be positive"
+                )
             
-            # Calculate minimum price for base ticket price
-            min_price = min(zone.zone_price for zone in event.zones)
+            # Validate zones
+            if not event.zones:
+                raise HTTPException(
+                    status_code=400,
+                    detail="At least one zone configuration is required"
+                )
             
-            print(f"Inserting event into database...")
-            cur.execute(
-                """
-                INSERT INTO events (category_id, title, description, event_date, duration,
-                                  capacity, ticket_price, created_by, status)
-                VALUES (%s, %s, %s, %s, %s::interval, %s, %s, %s, %s)
-                RETURNING event_id, title, description, event_date, duration, capacity, ticket_price, status
-                """,
-                (event.category_id, event.title, event.description, event.event_date,
-                 f"{event.duration} minutes", total_capacity, min_price,
-                 current_user["user_id"], event.status)
-            )
-            new_event = cur.fetchone()
-            event_id = new_event["event_id"]
-            print(f"Event inserted successfully: {dict(new_event)}")
-            
-            # Insert zone configurations
-            for zone in event.zones:
+            try:
+                # Verify all zones exist
+                zone_ids = [z.zone_id for z in event.zones]
                 cur.execute(
-                    """
-                    INSERT INTO event_zones (event_id, zone_id, available_seats, zone_price)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (event_id, zone.zone_id, zone.available_seats, zone.zone_price)
+                    "SELECT zone_id FROM club_zones WHERE zone_id = ANY(%s)",
+                    (zone_ids,)
                 )
-            
-            print(f"Zone configurations inserted for event {event_id}")
-            
-            # Log the action
-            log_user_action(
-                current_user["user_id"],
-                "create_event",
-                {
-                    "event_id": event_id,
-                    "title": event.title,
-                    "event_date": event.event_date.isoformat(),
-                    "zones_count": len(event.zones),
-                    "total_capacity": total_capacity,
-                    "status": event.status
-                }
-            )
-            
-            result = {
-                **dict(new_event),
-                "booked_seats": 0,
-                "category_name": None,
-                "zones": [zone.dict() for zone in event.zones],
-                "message": "Мероприятие успешно создано"
-            }
-            print(f"Returning result: {result}")
-            return result
-            
+                existing_zones = {row["zone_id"] for row in cur.fetchall()}
+                
+                invalid_zones = set(zone_ids) - existing_zones
+                if invalid_zones:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid zone IDs: {invalid_zones}"
+                    )
+                
+                # Calculate total capacity and minimum price
+                total_capacity = sum(z.available_seats for z in event.zones)
+                min_price = min(z.zone_price for z in event.zones)
+                
+                # Insert event
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO events (category_id, title, description, event_date, duration,
+                                          capacity, ticket_price, created_by, status)
+                        VALUES (%s, %s, %s, %s, %s::interval, %s, %s, %s, %s)
+                        RETURNING event_id, title, description, event_date, duration, capacity, 
+                                  ticket_price, status
+                        """,
+                        (event.category_id, event.title, event.description, event.event_date,
+                         f"{event.duration} minutes", total_capacity, min_price,
+                         session.user_id, event.status)
+                    )
+                    new_event = cur.fetchone()
+                    event_id = new_event["event_id"]
+                    
+                    # Insert zone configurations
+                    for zone in event.zones:
+                        cur.execute(
+                            """
+                            INSERT INTO event_zones (event_id, zone_id, available_seats, zone_price)
+                            VALUES (%s, %s, %s, %s)
+                            """,
+                            (event_id, zone.zone_id, zone.available_seats, zone.zone_price)
+                        )
+                    
+                    log_user_action(
+                        session.user_id,
+                        "create_event",
+                        {
+                            "event_id": event_id,
+                            "title": event.title,
+                            "event_date": event.event_date.isoformat(),
+                            "zones_count": len(event.zones),
+                            "total_capacity": total_capacity,
+                            "status": event.status
+                        }
+                    )
+                    
+                    log_api_request("/events/", "POST", 
+                                  user_id=session.user_id,
+                                  body={"event_id": event_id, "status": "success"})
+                    
+                    return new_event
+                    
+                except Exception as e:
+                    log_api_request("/events/", "POST", 
+                                  user_id=session.user_id,
+                                  error=e)
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to create event: {str(e)}"
+                    )
+                    
+            except HTTPException:
+                raise
+            except Exception as e:
+                log_api_request("/events/", "POST", 
+                              user_id=session.user_id,
+                              error=e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to validate zones: {str(e)}"
+                )
+                
     except Exception as e:
-        print(f"Error creating event: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        log_api_request("/events/", "POST", 
+                       user_id=getattr(session, "user_id", None),
+                       error=e)
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create event: {str(e)}\n{traceback.format_exc()}"
+        )
 
 @router.get("/{event_id}")
 async def get_event(event_id: int):
@@ -376,216 +397,234 @@ async def get_event(event_id: int):
 async def update_event(
     event_id: int,
     event: EventUpdate,
-    current_user: dict = Depends(verify_csrf())
+    session: SessionData = Depends(verifier)
 ):
     """Update an existing event"""
-    # Check if user has admin or moderator role
-    if not current_user.get("role") or current_user["role"] not in ["admin", "moderator"]:
-        raise HTTPException(status_code=403, detail="Недостаточно прав для редактирования мероприятий")
+    with get_db_cursor(commit=True) as cur:
+        # Check if event exists and user has permission
+        cur.execute(
+            """
+            SELECT e.*, 
+                   CASE WHEN e.created_by = %s THEN true
+                        WHEN %s = 'admin' THEN true
+                        ELSE false
+                   END as can_edit
+            FROM events e
+            WHERE e.event_id = %s
+            """,
+            (session.user_id, session.role, event_id)
+        )
+        db_event = cur.fetchone()
         
-    try:
-        with get_db_cursor(commit=True) as cur:
-            # Check if event exists
-            cur.execute("SELECT * FROM events WHERE event_id = %s", (event_id,))
-            existing_event = cur.fetchone()
-            if not existing_event:
-                raise HTTPException(status_code=404, detail="Мероприятие не найдено")
-            
-            # If trying to update date, ensure it's in the future (unless admin)
-            if event.event_date and current_user.get("role") != "admin":
-                if event.event_date <= datetime.now():
-                    raise HTTPException(status_code=400, detail="Дата мероприятия должна быть в будущем")
-                
-            update_fields = []
-            params = []
-            
-            # Handle basic event fields
-            for field, value in event.dict(exclude_unset=True, exclude={'zones'}).items():
-                if value is not None:
-                    if field == "duration":
-                        update_fields.append(f"{field} = %s::interval")
-                        params.append(f"{value} minutes")
-                    else:
-                        update_fields.append(f"{field} = %s")
-                        params.append(value)
-            
-            # Update basic event fields if any
-            if update_fields:
-                params.append(event_id)
-                query = f"""
-                    UPDATE events
-                    SET {", ".join(update_fields)}
-                    WHERE event_id = %s
-                """
-                cur.execute(query, params)
-            
-            # Handle zones update if provided
-            if event.zones is not None:
-                # Validate zones exist
-                zone_ids = [zone.zone_id for zone in event.zones]
-                cur.execute(
-                    "SELECT zone_id FROM club_zones WHERE zone_id = ANY(%s)",
-                    (zone_ids,)
+        if not db_event:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        if not db_event["can_edit"]:
+            raise HTTPException(status_code=403, detail="Not authorized to edit this event")
+        
+        # Build update query
+        update_fields = []
+        params = []
+        
+        if event.category_id is not None:
+            update_fields.append("category_id = %s")
+            params.append(event.category_id)
+        
+        if event.title is not None:
+            update_fields.append("title = %s")
+            params.append(event.title)
+        
+        if event.description is not None:
+            update_fields.append("description = %s")
+            params.append(event.description)
+        
+        if event.event_date is not None:
+            if event.event_date <= datetime.now():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Event date must be in the future"
                 )
-                existing_zones = [row['zone_id'] for row in cur.fetchall()]
-                
-                missing_zones = set(zone_ids) - set(existing_zones)
-                if missing_zones:
-                    raise HTTPException(
-                        status_code=400, 
-                        detail=f"Зоны не найдены: {missing_zones}"
-                    )
-                
-                # Delete existing zone configurations
-                cur.execute("DELETE FROM event_zones WHERE event_id = %s", (event_id,))
-                
-                # Insert new zone configurations
-                min_price = float('inf')
-                total_capacity = 0
-                
-                for zone in event.zones:
-                    cur.execute(
-                        """
-                        INSERT INTO event_zones (event_id, zone_id, available_seats, zone_price)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        (event_id, zone.zone_id, zone.available_seats, zone.zone_price)
-                    )
-                    min_price = min(min_price, zone.zone_price)
-                    total_capacity += zone.available_seats
-                
-                # Update event capacity and price
-                cur.execute(
-                    "UPDATE events SET capacity = %s, ticket_price = %s WHERE event_id = %s",
-                    (total_capacity, min_price, event_id)
+            update_fields.append("event_date = %s")
+            params.append(event.event_date)
+        
+        if event.duration is not None:
+            if event.duration <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Duration must be positive"
+                )
+            update_fields.append("duration = %s::interval")
+            params.append(f"{event.duration} minutes")
+        
+        if event.status is not None:
+            if event.status not in ["draft", "published", "cancelled"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid status"
+                )
+            update_fields.append("status = %s")
+            params.append(event.status)
+        
+        # Update zones if provided
+        if event.zones is not None:
+            # Validate zones
+            if not event.zones:
+                raise HTTPException(
+                    status_code=400,
+                    detail="At least one zone configuration is required"
                 )
             
-            # Get updated event data
+            # Verify all zones exist
+            zone_ids = [z.zone_id for z in event.zones]
             cur.execute(
-                """
-                SELECT e.*, c.name as category_name
-                FROM events e
-                LEFT JOIN event_categories c ON e.category_id = c.category_id
-                WHERE e.event_id = %s
-                """,
-                (event_id,)
+                "SELECT zone_id FROM club_zones WHERE zone_id = ANY(%s)",
+                (zone_ids,)
             )
+            existing_zones = {row["zone_id"] for row in cur.fetchall()}
+            
+            invalid_zones = set(zone_ids) - existing_zones
+            if invalid_zones:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid zone IDs: {invalid_zones}"
+                )
+            
+            # Calculate new capacity and minimum price
+            total_capacity = sum(z.available_seats for z in event.zones)
+            min_price = min(z.zone_price for z in event.zones)
+            
+            update_fields.extend(["capacity = %s", "ticket_price = %s"])
+            params.extend([total_capacity, min_price])
+            
+            # Update zone configurations
+            cur.execute("DELETE FROM event_zones WHERE event_id = %s", (event_id,))
+            for zone in event.zones:
+                cur.execute(
+                    """
+                    INSERT INTO event_zones (event_id, zone_id, available_seats, zone_price)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (event_id, zone.zone_id, zone.available_seats, zone.zone_price)
+                )
+        
+        if update_fields:
+            # Add event_id to params
+            params.append(event_id)
+            
+            # Update event
+            query = f"""
+                UPDATE events
+                SET {", ".join(update_fields)}
+                WHERE event_id = %s
+                RETURNING *
+            """
+            cur.execute(query, params)
             updated_event = cur.fetchone()
             
             # Log the action
             log_user_action(
-                current_user["user_id"],
+                session.user_id,
                 "update_event",
                 {
                     "event_id": event_id,
-                    "updated_fields": list(event.dict(exclude_unset=True).keys())
+                    "updated_fields": [f.split(" = ")[0] for f in update_fields]
                 }
             )
             
-            return dict(updated_event)
-    except Exception as e:
-        print(f"Error updating event: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+            return updated_event
+        
+        return db_event
 
 @router.patch("/{event_id}/status")
 async def update_event_status(
     event_id: int,
     status_update: EventStatusUpdate,
-    current_user: dict = Depends(verify_csrf())
+    session: SessionData = Depends(verifier)
 ):
     """Update event status (planned -> active -> cancelled)"""
-    # Check if user has admin or moderator role
-    if not current_user.get("role") or current_user["role"] not in ["admin", "moderator"]:
-        raise HTTPException(status_code=403, detail="Недостаточно прав для изменения статуса мероприятий")
-    
-    try:
-        with get_db_cursor(commit=True) as cur:
-            # Check if event exists
-            cur.execute("SELECT * FROM events WHERE event_id = %s", (event_id,))
-            event = cur.fetchone()
-            if not event:
-                raise HTTPException(status_code=404, detail="Мероприятие не найдено")
-            
-            old_status = event['status']
-            new_status = status_update.status
-            
-            # Validate status transition
-            valid_transitions = {
-                'planned': ['active', 'cancelled'],
-                'active': ['cancelled'],
-                'cancelled': []  # Cannot change from cancelled
-            }
-            
-            if new_status not in valid_transitions.get(old_status, []):
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Невозможно изменить статус с '{old_status}' на '{new_status}'"
-                )
-            
-            # Update status
+    with get_db_cursor(commit=True) as cur:
+        # Check if event exists
+        cur.execute("SELECT * FROM events WHERE event_id = %s", (event_id,))
+        event = cur.fetchone()
+        if not event:
+            raise HTTPException(status_code=404, detail="Мероприятие не найдено")
+        
+        old_status = event['status']
+        new_status = status_update.status
+        
+        # Validate status transition
+        valid_transitions = {
+            'planned': ['active', 'cancelled'],
+            'active': ['cancelled'],
+            'cancelled': []  # Cannot change from cancelled
+        }
+        
+        if new_status not in valid_transitions.get(old_status, []):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Невозможно изменить статус с '{old_status}' на '{new_status}'"
+            )
+        
+        # Update status
+        cur.execute(
+            "UPDATE events SET status = %s WHERE event_id = %s",
+            (new_status, event_id)
+        )
+        
+        # If cancelling event, cancel all pending bookings
+        if new_status == 'cancelled':
             cur.execute(
-                "UPDATE events SET status = %s WHERE event_id = %s",
-                (new_status, event_id)
+                "UPDATE bookings SET status = 'cancelled' WHERE event_id = %s AND status = 'pending'",
+                (event_id,)
             )
+            cancelled_bookings = cur.rowcount
             
-            # If cancelling event, cancel all pending bookings
-            if new_status == 'cancelled':
-                cur.execute(
-                    "UPDATE bookings SET status = 'cancelled' WHERE event_id = %s AND status = 'pending'",
-                    (event_id,)
-                )
-                cancelled_bookings = cur.rowcount
-                
-                # Refund confirmed bookings
-                cur.execute(
-                    """
-                    UPDATE transactions 
-                    SET status = 'refunded' 
-                    WHERE booking_id IN (
-                        SELECT booking_id FROM bookings 
-                        WHERE event_id = %s AND status = 'confirmed'
-                    ) AND status = 'completed'
-                    """,
-                    (event_id,)
-                )
-                refunded_transactions = cur.rowcount
-                
-                # Mark confirmed bookings as cancelled
-                cur.execute(
-                    "UPDATE bookings SET status = 'cancelled' WHERE event_id = %s AND status = 'confirmed'",
-                    (event_id,)
-                )
-            
-            # Log the action
-            log_details = {
-                "event_id": event_id,
-                "old_status": old_status,
-                "new_status": new_status,
-                "event_title": event['title']
-            }
-            
-            if new_status == 'cancelled':
-                log_details.update({
-                    "cancelled_bookings": cancelled_bookings,
-                    "refunded_transactions": refunded_transactions
-                })
-            
-            log_user_action(
-                current_user["user_id"],
-                "update_event_status",
-                log_details
+            # Refund confirmed bookings
+            cur.execute(
+                """
+                UPDATE transactions 
+                SET status = 'refunded' 
+                WHERE booking_id IN (
+                    SELECT booking_id FROM bookings 
+                    WHERE event_id = %s AND status = 'confirmed'
+                ) AND status = 'completed'
+                """,
+                (event_id,)
             )
+            refunded_transactions = cur.rowcount
             
-            return {
-                "message": f"Статус мероприятия изменен с '{old_status}' на '{new_status}'",
-                "event_id": event_id,
-                "old_status": old_status,
-                "new_status": new_status
-            }
-            
-    except Exception as e:
-        print(f"Error updating event status: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+            # Mark confirmed bookings as cancelled
+            cur.execute(
+                "UPDATE bookings SET status = 'cancelled' WHERE event_id = %s AND status = 'confirmed'",
+                (event_id,)
+            )
+        
+        # Log the action
+        log_details = {
+            "event_id": event_id,
+            "old_status": old_status,
+            "new_status": new_status,
+            "event_title": event['title']
+        }
+        
+        if new_status == 'cancelled':
+            log_details.update({
+                "cancelled_bookings": cancelled_bookings,
+                "refunded_transactions": refunded_transactions
+            })
+        
+        log_user_action(
+            session.user_id,
+            "update_event_status",
+            log_details
+        )
+        
+        return {
+            "message": f"Статус мероприятия изменен с '{old_status}' на '{new_status}'",
+            "event_id": event_id,
+            "old_status": old_status,
+            "new_status": new_status
+        }
 
 @router.get("/{event_id}/seats")
 async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
@@ -642,60 +681,81 @@ async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
 @router.delete("/{event_id}")
 async def delete_event(
     event_id: int,
-    current_user: dict = Depends(verify_csrf())
+    session: SessionData = Depends(verifier)
 ):
     """Delete an event"""
-    # Check if user has admin or moderator role
-    if not current_user.get("role") or current_user["role"] not in ["admin", "moderator"]:
-        raise HTTPException(status_code=403, detail="Недостаточно прав для удаления мероприятий")
+    with get_db_cursor(commit=True) as cur:
+        # Check if event exists and user has permission
+        cur.execute(
+            """
+            SELECT e.*, 
+                   CASE WHEN e.created_by = %s THEN true
+                        WHEN %s = 'admin' THEN true
+                        ELSE false
+                   END as can_delete
+            FROM events e
+            WHERE e.event_id = %s
+            """,
+            (session.user_id, session.role, event_id)
+        )
+        event = cur.fetchone()
         
-    try:
-        with get_db_cursor(commit=True) as cur:
-            # Check if event exists
-            cur.execute("SELECT * FROM events WHERE event_id = %s", (event_id,))
-            event = cur.fetchone()
-            if not event:
-                raise HTTPException(status_code=404, detail="Мероприятие не найдено")
-            
-            # Check if event has bookings
+        if not event:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        if not event["can_delete"]:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this event")
+        
+        # Check if event has any bookings
+        cur.execute(
+            "SELECT COUNT(*) as booking_count FROM bookings WHERE event_id = %s",
+            (event_id,)
+        )
+        booking_count = cur.fetchone()["booking_count"]
+        
+        if booking_count > 0:
+            # Instead of deleting, mark as cancelled
             cur.execute(
-                "SELECT COUNT(*) as booking_count FROM bookings WHERE event_id = %s AND status IN ('confirmed', 'pending')",
+                "UPDATE events SET status = 'cancelled' WHERE event_id = %s",
                 (event_id,)
             )
-            booking_count = cur.fetchone()["booking_count"]
             
-            if booking_count > 0:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Невозможно удалить мероприятие с существующими бронированиями"
-                )
-                
-            # Delete event (cascade will delete event_zones)
-            cur.execute("DELETE FROM events WHERE event_id = %s", (event_id,))
+            # Cancel all bookings
+            cur.execute(
+                "UPDATE bookings SET status = 'cancelled' WHERE event_id = %s",
+                (event_id,)
+            )
             
             # Log the action
             log_user_action(
-                current_user["user_id"],
-                "delete_event",
-                {
-                    "event_id": event_id,
-                    "title": event.get("title", "Unknown")
-                }
+                session.user_id,
+                "cancel_event",
+                {"event_id": event_id, "reason": "has_bookings"}
             )
             
-            return {"message": "Мероприятие успешно удалено"}
-    except Exception as e:
-        print(f"Error deleting event: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+            return {"message": "Event cancelled due to existing bookings"}
+        
+        # Delete event zones and event
+        cur.execute("DELETE FROM event_zones WHERE event_id = %s", (event_id,))
+        cur.execute("DELETE FROM events WHERE event_id = %s", (event_id,))
+        
+        # Log the action
+        log_user_action(
+            session.user_id,
+            "delete_event",
+            {"event_id": event_id}
+        )
+        
+        return {"message": "Event deleted successfully"}
 
 @router.get("/{event_id}/statistics")
 async def get_event_statistics(
     event_id: int,
-    current_user: dict = Depends(get_current_user)
+    session: SessionData = Depends(get_current_user)
 ):
     """Get detailed statistics for an event"""
     # Check if user has admin or moderator role
-    if not current_user.get("role") or current_user["role"] not in ["admin", "moderator"]:
+    if not session.role or session.role not in ["admin", "moderator"]:
         raise HTTPException(status_code=403, detail="Недостаточно прав для просмотра статистики")
     
     try:

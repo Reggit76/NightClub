@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 from database import get_db_cursor
-from utils.auth import get_current_user, verify_csrf
+from utils.auth import get_current_user, verifier, SessionData
 from utils.helpers import log_user_action
 from datetime import datetime, timedelta
 
@@ -13,20 +13,20 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
 
-def require_admin(current_user: dict = Depends(get_current_user)):
+def require_admin(session: SessionData = Depends(verifier)):
     """Dependency to require admin role"""
-    if current_user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Доступ запрещен. Требуются права администратора.")
-    return current_user
+    if session.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
+    return session
 
-def require_admin_or_moderator(current_user: dict = Depends(get_current_user)):
+def require_admin_or_moderator(session: SessionData = Depends(verifier)):
     """Dependency to require admin or moderator role"""
-    if current_user["role"] not in ["admin", "moderator"]:
-        raise HTTPException(status_code=403, detail="Доступ запрещен. Требуются права администратора или модератора.")
-    return current_user
+    if session.role not in ["admin", "moderator"]:
+        raise HTTPException(status_code=403, detail="Access denied. Admin or moderator role required.")
+    return session
 
 @router.get("/users")
-async def get_users(current_user: dict = Depends(require_admin_or_moderator)):
+async def get_users(session: SessionData = Depends(require_admin_or_moderator)):
     """Get all users - available for admin and moderator"""
     with get_db_cursor() as cur:
         cur.execute("""
@@ -60,7 +60,7 @@ async def get_users(current_user: dict = Depends(require_admin_or_moderator)):
 @router.get("/users/{user_id}")
 async def get_user_details(
     user_id: int,
-    current_user: dict = Depends(require_admin_or_moderator)
+    session: SessionData = Depends(require_admin_or_moderator)
 ):
     """Get user details - available for admin and moderator"""
     with get_db_cursor() as cur:
@@ -104,88 +104,67 @@ async def get_user_details(
 @router.put("/users/{user_id}")
 async def update_user(
     user_id: int,
-    user_update: dict,
-    current_user: dict = Depends(verify_csrf())
+    user_update: UserUpdate,
+    session: SessionData = Depends(require_admin)
 ):
-    """Update user role or status with role-based restrictions"""
-    # Basic permission check
-    if current_user["role"] not in ["admin", "moderator"]:
-        raise HTTPException(status_code=403, detail="Доступ запрещен")
-
-    # Role change restrictions - ONLY ADMIN can change roles
-    if "role" in user_update:
-        if current_user["role"] != "admin":
-            raise HTTPException(
-                status_code=403, 
-                detail="Только администраторы могут изменять роли пользователей"
-            )
-    
-    # Prevent changing own role or status
-    if user_id == current_user["user_id"]:
-        raise HTTPException(
-            status_code=403, 
-            detail="Нельзя изменить свою роль или статус"
-        )
-    
-    # Moderators cannot modify admin users
-    with get_db_cursor() as cur:
-        cur.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
-        target_user = cur.fetchone()
-        
-        if not target_user:
-            raise HTTPException(status_code=404, detail="Пользователь не найден")
-        
-        if current_user["role"] == "moderator" and target_user["role"] == "admin":
-            raise HTTPException(
-                status_code=403, 
-                detail="Модераторы не могут изменять администраторов"
-            )
-    
-    # Update user
+    """Update user role or status"""
     with get_db_cursor(commit=True) as cur:
+        # Check if user exists
+        cur.execute(
+            "SELECT * FROM users WHERE user_id = %s",
+            (user_id,)
+        )
+        user = cur.fetchone()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Prevent self-demotion
+        if user_id == session.user_id and user_update.role and user_update.role != "admin":
+            raise HTTPException(status_code=400, detail="Cannot demote yourself from admin")
+        
         # Build update query
         update_fields = []
         params = []
         
-        if "role" in user_update:
+        if user_update.role is not None:
+            if user_update.role not in ["admin", "moderator", "user"]:
+                raise HTTPException(status_code=400, detail="Invalid role")
             update_fields.append("role = %s")
-            params.append(user_update["role"])
+            params.append(user_update.role)
         
-        if "is_active" in user_update:
+        if user_update.is_active is not None:
             update_fields.append("is_active = %s")
-            params.append(user_update["is_active"])
+            params.append(user_update.is_active)
         
-        if not update_fields:
-            raise HTTPException(status_code=400, detail="Нет данных для обновления")
+        if update_fields:
+            params.append(user_id)
+            query = f"""
+                UPDATE users
+                SET {", ".join(update_fields)}
+                WHERE user_id = %s
+                RETURNING *
+            """
+            cur.execute(query, params)
+            updated_user = cur.fetchone()
+            
+            # Log the action
+            log_user_action(
+                session.user_id,
+                "update_user",
+                {
+                    "target_user_id": user_id,
+                    "updated_fields": [f.split(" = ")[0] for f in update_fields]
+                }
+            )
+            
+            return updated_user
         
-        params.append(user_id)
-        
-        # Execute update
-        cur.execute(f"""
-            UPDATE users 
-            SET {", ".join(update_fields)}
-            WHERE user_id = %s
-            RETURNING *
-        """, params)
-        
-        updated_user = cur.fetchone()
-        
-        # Log the action
-        log_user_action(
-            current_user["user_id"],
-            "update_user", 
-            {
-                "target_user_id": user_id,
-                "changes": user_update,
-                "performer_role": current_user["role"]
-            }
-        )
-        
-        return dict(updated_user)
+        return user
 
 @router.get("/events")
 async def get_admin_events(
-    current_user: dict = Depends(require_admin_or_moderator),
+    session: SessionData = Depends(require_admin_or_moderator),
     status: Optional[str] = None,
     include_past: bool = False
 ):
@@ -222,7 +201,7 @@ async def get_admin_events(
         return [dict(event) for event in events]
 
 @router.get("/stats")
-async def get_stats(current_user: dict = Depends(require_admin_or_moderator)):
+async def get_stats(session: SessionData = Depends(require_admin_or_moderator)):
     """Get admin statistics - available for admin and moderator"""
     with get_db_cursor() as cur:
         # Get overall statistics
@@ -295,78 +274,51 @@ async def get_stats(current_user: dict = Depends(require_admin_or_moderator)):
             "zones": [dict(zone) for zone in zone_stats]
         }
 
-@router.get("/logs")
+@router.get("/audit-logs")
 async def get_audit_logs(
-    current_user: dict = Depends(require_admin),  # ONLY ADMIN can view logs
-    limit: int = 100,
-    offset: int = 0,
     user_id: Optional[int] = None,
     action: Optional[str] = None,
-    start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    session: SessionData = Depends(require_admin)
 ):
-    """Get audit logs with filtering options - ADMIN ONLY"""
-    try:
-        with get_db_cursor() as cur:
-            # Build query conditions
-            conditions = []
-            params = []
-            
-            if user_id:
-                conditions.append("l.user_id = %s")
-                params.append(user_id)
-                
-            if action:
-                conditions.append("l.action = %s")
-                params.append(action)
-                
-            if start_date:
-                conditions.append("l.action_date >= %s")
-                params.append(start_date)
-                
-            if end_date:
-                conditions.append("l.action_date <= %s")
-                params.append(end_date)
-            
-            # Build WHERE clause
-            where_clause = " AND ".join(conditions) if conditions else "1=1"
-            
-            # Get total count
-            cur.execute(f"""
-                SELECT COUNT(*) as total
-                FROM audit_logs l
-                WHERE {where_clause}
-            """, params)
-            
-            total = cur.fetchone()["total"]
-            
-            # Get logs with user info
-            cur.execute(f"""
-                SELECT l.*,
-                       u.username,
-                       COALESCE(p.first_name || ' ' || p.last_name, u.username) as full_name,
-                       u.role as user_role
-                FROM audit_logs l
-                JOIN users u ON l.user_id = u.user_id
-                LEFT JOIN user_profiles p ON u.user_id = p.user_id
-                WHERE {where_clause}
-                ORDER BY l.action_date DESC
-                LIMIT %s OFFSET %s
-            """, params + [limit, offset])
-            
-            logs = cur.fetchall()
-            
-            return {
-                "total": total,
-                "logs": [dict(log) for log in logs],
-                "message": f"Загружено {len(logs)} записей из {total}"
-            }
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка загрузки логов: {str(e)}")
+    """Get audit logs with optional filters"""
+    with get_db_cursor() as cur:
+        conditions = []
+        params = []
+        
+        if user_id:
+            conditions.append("user_id = %s")
+            params.append(user_id)
+        
+        if action:
+            conditions.append("action = %s")
+            params.append(action)
+        
+        if from_date:
+            conditions.append("timestamp >= %s")
+            params.append(from_date)
+        
+        if to_date:
+            conditions.append("timestamp <= %s")
+            params.append(to_date)
+        
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        
+        query = f"""
+            SELECT l.*, u.username
+            FROM audit_logs l
+            JOIN users u ON l.user_id = u.user_id
+            WHERE {where_clause}
+            ORDER BY l.timestamp DESC
+            LIMIT 1000
+        """
+        cur.execute(query, params)
+        logs = cur.fetchall()
+        return logs
 
 @router.get("/system-health")
-async def get_system_health(current_user: dict = Depends(require_admin)):
+async def get_system_health(session: SessionData = Depends(require_admin)):
     """Get system health information - ADMIN ONLY"""
     try:
         with get_db_cursor() as cur:
@@ -422,7 +374,7 @@ async def get_system_health(current_user: dict = Depends(require_admin)):
         }
 
 @router.post("/cleanup")
-async def cleanup_system(current_user: dict = Depends(require_admin)):
+async def cleanup_system(session: SessionData = Depends(require_admin)):
     """Cleanup system data - ADMIN ONLY"""
     try:
         with get_db_cursor(commit=True) as cur:
@@ -454,7 +406,7 @@ async def cleanup_system(current_user: dict = Depends(require_admin)):
             
             # Log the cleanup action
             log_user_action(
-                current_user["user_id"],
+                session.user_id,
                 "system_cleanup",
                 cleanup_results
             )
@@ -468,7 +420,7 @@ async def cleanup_system(current_user: dict = Depends(require_admin)):
         raise HTTPException(status_code=500, detail=f"Ошибка очистки системы: {str(e)}")
 
 @router.get("/export/users")
-async def export_users(current_user: dict = Depends(require_admin)):
+async def export_users(session: SessionData = Depends(require_admin)):
     """Export users data - ADMIN ONLY"""
     try:
         with get_db_cursor() as cur:
@@ -488,7 +440,7 @@ async def export_users(current_user: dict = Depends(require_admin)):
             
             # Log the export action
             log_user_action(
-                current_user["user_id"],
+                session.user_id,
                 "export_users",
                 {"exported_count": len(users)}
             )
@@ -506,10 +458,10 @@ async def export_users(current_user: dict = Depends(require_admin)):
 async def update_event_status_admin(
     event_id: int,
     status_data: dict,
-    current_user: dict = Depends(verify_csrf())
+    session: SessionData = Depends(require_admin)
 ):
     """Update event status via admin panel"""
-    if current_user["role"] not in ["admin", "moderator"]:
+    if session.role not in ["admin", "moderator"]:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     
     try:
@@ -521,7 +473,61 @@ async def update_event_status_admin(
         from routers.events import update_event_status, EventStatusUpdate
         
         status_update = EventStatusUpdate(status=new_status)
-        return await update_event_status(event_id, status_update, current_user)
+        return await update_event_status(event_id, status_update, session)
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/statistics")
+async def get_statistics(session: SessionData = Depends(require_admin)):
+    """Get system statistics"""
+    with get_db_cursor() as cur:
+        # User statistics
+        cur.execute("""
+            SELECT
+                COUNT(*) as total_users,
+                COUNT(CASE WHEN role = 'admin' THEN 1 END) as admin_count,
+                COUNT(CASE WHEN role = 'moderator' THEN 1 END) as moderator_count,
+                COUNT(CASE WHEN is_active = true THEN 1 END) as active_users
+            FROM users
+        """)
+        user_stats = cur.fetchone()
+        
+        # Event statistics
+        cur.execute("""
+            SELECT
+                COUNT(*) as total_events,
+                COUNT(CASE WHEN event_date > NOW() THEN 1 END) as upcoming_events,
+                COUNT(CASE WHEN status = 'published' THEN 1 END) as published_events,
+                COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_events
+            FROM events
+        """)
+        event_stats = cur.fetchone()
+        
+        # Booking statistics
+        cur.execute("""
+            SELECT
+                COUNT(*) as total_bookings,
+                COUNT(CASE WHEN status = 'confirmed' THEN 1 END) as confirmed_bookings,
+                COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_bookings,
+                COALESCE(SUM(price), 0) as total_revenue
+            FROM bookings
+        """)
+        booking_stats = cur.fetchone()
+        
+        # Recent activity
+        cur.execute("""
+            SELECT l.*, u.username
+            FROM audit_logs l
+            JOIN users u ON l.user_id = u.user_id
+            ORDER BY l.timestamp DESC
+            LIMIT 10
+        """)
+        recent_activity = cur.fetchall()
+        
+        return {
+            "users": user_stats,
+            "events": event_stats,
+            "bookings": booking_stats,
+            "recent_activity": recent_activity
+        }

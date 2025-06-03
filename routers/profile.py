@@ -1,190 +1,162 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 from typing import Optional
-from datetime import date
+from datetime import date, datetime
 from database import get_db_cursor
-from utils.auth import get_current_user, verify_password, get_password_hash, verify_csrf
+from utils.auth import get_current_user, verify_password, get_password_hash, verifier, SessionData
 from utils.helpers import log_user_action
 
 router = APIRouter()
 
 class ProfileUpdate(BaseModel):
+    email: Optional[EmailStr] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
-    birth_date: Optional[date] = None
 
-class PasswordChange(BaseModel):
+class PasswordUpdate(BaseModel):
     current_password: str
     new_password: str
 
 @router.get("/")
-async def get_profile(current_user: dict = Depends(get_current_user)):
-    """Get current user's profile information"""
-    print(f"Getting profile for user: {current_user}")
-    
-    try:
-        with get_db_cursor() as cur:
-            # Get user ID from token
-            user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
-            print(f"Using user_id: {user_id}")
-            
-            # Get user data with role
-            cur.execute(
-                """
-                SELECT u.user_id, u.username, u.email, u.role, u.created_at, u.is_active,
-                       p.first_name, p.last_name, p.phone, p.birth_date
-                FROM users u
-                LEFT JOIN user_profiles p ON u.user_id = p.user_id
-                WHERE u.user_id = %s
-                """,
-                (user_id,)
-            )
-            profile = cur.fetchone()
-            
-            if not profile:
-                print(f"Profile not found for user_id: {user_id}")
-                raise HTTPException(status_code=404, detail="Profile not found")
-                
-            print(f"Profile found: {dict(profile)}")
-            
-            # Get user statistics
-            cur.execute(
-                """
-                SELECT 
-                    COUNT(b.booking_id) as total_bookings,
-                    COALESCE(SUM(t.amount), 0) as total_spent,
-                    MAX(b.booking_date) as last_booking_date
-                FROM bookings b
-                LEFT JOIN transactions t ON b.booking_id = t.booking_id AND t.status = 'completed'
-                WHERE b.user_id = %s
-                """,
-                (user_id,)
-            )
-            stats = cur.fetchone() or {
-                "total_bookings": 0,
-                "total_spent": 0,
-                "last_booking_date": None
-            }
-            
-            print(f"Stats found: {dict(stats)}")
-            
-            # Convert to dict and add stats
-            result = dict(profile)
-            result["stats"] = dict(stats)
-            
-            return result
-    except Exception as e:
-        print(f"Error getting profile: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+async def get_profile(session: SessionData = Depends(verifier)):
+    """Get user profile"""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT u.user_id, u.username, u.email, u.role,
+                   p.first_name, p.last_name, p.phone
+            FROM users u
+            LEFT JOIN user_profiles p ON u.user_id = p.user_id
+            WHERE u.user_id = %s
+            """,
+            (session.user_id,)
+        )
+        profile = cur.fetchone()
+        
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        
+        return profile
 
 @router.put("/")
 async def update_profile(
-    profile_update: ProfileUpdate,
-    current_user: dict = Depends(verify_csrf())
+    profile: ProfileUpdate,
+    session: SessionData = Depends(verifier)
 ):
-    """Update current user's profile"""
-    print(f"Updating profile for user: {current_user}")
-    print(f"Update data: {profile_update.dict(exclude_unset=True)}")
-    
-    try:
-        with get_db_cursor(commit=True) as cur:
-            user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
-            
-            # Check if profile exists, if not create it
+    """Update user profile"""
+    with get_db_cursor(commit=True) as cur:
+        # Update email in users table if provided
+        if profile.email:
             cur.execute(
-                "SELECT profile_id FROM user_profiles WHERE user_id = %s",
-                (user_id,)
+                "UPDATE users SET email = %s WHERE user_id = %s",
+                (profile.email, session.user_id)
             )
-            profile_exists = cur.fetchone()
-            
+        
+        # Check if profile exists
+        cur.execute(
+            "SELECT * FROM user_profiles WHERE user_id = %s",
+            (session.user_id,)
+        )
+        existing_profile = cur.fetchone()
+        
+        if existing_profile:
+            # Update existing profile
             update_fields = []
             params = []
             
-            for field, value in profile_update.dict(exclude_unset=True).items():
-                if value is not None:
-                    update_fields.append(f"{field} = %s")
-                    params.append(value)
+            if profile.first_name is not None:
+                update_fields.append("first_name = %s")
+                params.append(profile.first_name)
             
-            if not update_fields:
-                return {"message": "No fields to update"}
+            if profile.last_name is not None:
+                update_fields.append("last_name = %s")
+                params.append(profile.last_name)
             
-            if profile_exists:
-                # Update existing profile
-                params.append(user_id)
+            if profile.phone is not None:
+                update_fields.append("phone = %s")
+                params.append(profile.phone)
+            
+            if update_fields:
+                params.append(session.user_id)
                 query = f"""
                     UPDATE user_profiles
                     SET {", ".join(update_fields)}
                     WHERE user_id = %s
+                    RETURNING *
                 """
                 cur.execute(query, params)
-                print(f"Updated existing profile for user_id: {user_id}")
-            else:
-                # Create new profile
-                field_names = ["user_id"] + [field for field, value in profile_update.dict(exclude_unset=True).items() if value is not None]
-                field_values = [user_id] + [value for field, value in profile_update.dict(exclude_unset=True).items() if value is not None]
-                placeholders = ", ".join(["%s"] * len(field_values))
-                
-                query = f"""
-                    INSERT INTO user_profiles ({", ".join(field_names)})
-                    VALUES ({placeholders})
+                updated_profile = cur.fetchone()
+        else:
+            # Create new profile
+            cur.execute(
                 """
-                cur.execute(query, field_values)
-                print(f"Created new profile for user_id: {user_id}")
-            
-            # Log the action
-            log_user_action(
-                user_id,
-                "update_profile",
-                {
-                    "updated_fields": list(profile_update.dict(exclude_unset=True).keys())
-                }
+                INSERT INTO user_profiles (user_id, first_name, last_name, phone)
+                VALUES (%s, %s, %s, %s)
+                RETURNING *
+                """,
+                (session.user_id, profile.first_name, profile.last_name, profile.phone)
             )
-            
-            return {"message": "Profile updated successfully"}
-    except Exception as e:
-        print(f"Error updating profile: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+            updated_profile = cur.fetchone()
+        
+        # Log the action
+        log_user_action(
+            session.user_id,
+            "update_profile",
+            {
+                "updated_fields": [
+                    field for field in ["email", "first_name", "last_name", "phone"]
+                    if getattr(profile, field) is not None
+                ]
+            }
+        )
+        
+        # Get complete profile data
+        cur.execute(
+            """
+            SELECT u.user_id, u.username, u.email, u.role,
+                   p.first_name, p.last_name, p.phone
+            FROM users u
+            LEFT JOIN user_profiles p ON u.user_id = p.user_id
+            WHERE u.user_id = %s
+            """,
+            (session.user_id,)
+        )
+        return cur.fetchone()
 
-@router.post("/change-password")
-async def change_password(
-    password_data: PasswordChange,
-    current_user: dict = Depends(verify_csrf())
+@router.put("/password")
+async def update_password(
+    password_update: PasswordUpdate,
+    session: SessionData = Depends(verifier)
 ):
-    """Change current user's password"""
-    print(f"Changing password for user: {current_user}")
-    
-    try:
-        with get_db_cursor(commit=True) as cur:
-            user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
-            
-            # Get current password hash
-            cur.execute(
-                "SELECT password_hash FROM users WHERE user_id = %s",
-                (user_id,)
-            )
-            user = cur.fetchone()
-            
-            if not user or not verify_password(password_data.current_password, user["password_hash"]):
-                raise HTTPException(status_code=400, detail="Current password is incorrect")
-            
-            # Update password
-            new_password_hash = get_password_hash(password_data.new_password)
-            cur.execute(
-                "UPDATE users SET password_hash = %s WHERE user_id = %s",
-                (new_password_hash, user_id)
-            )
-            
-            print(f"Password changed successfully for user_id: {user_id}")
-            
-            # Log the action
-            log_user_action(
-                user_id,
-                "change_password",
-                {"action": "Password changed successfully"}
-            )
-            
-            return {"message": "Password changed successfully"}
-    except Exception as e:
-        print(f"Error changing password: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    """Update user password"""
+    with get_db_cursor(commit=True) as cur:
+        # Get current password hash
+        cur.execute(
+            "SELECT password_hash FROM users WHERE user_id = %s",
+            (session.user_id,)
+        )
+        user = cur.fetchone()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Verify current password
+        if not verify_password(password_update.current_password, user["password_hash"]):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+        
+        # Update password
+        new_password_hash = get_password_hash(password_update.new_password)
+        cur.execute(
+            "UPDATE users SET password_hash = %s WHERE user_id = %s",
+            (new_password_hash, session.user_id)
+        )
+        
+        # Log the action
+        log_user_action(
+            session.user_id,
+            "update_password",
+            {"timestamp": datetime.now().isoformat()}
+        )
+        
+        return {"message": "Password updated successfully"}

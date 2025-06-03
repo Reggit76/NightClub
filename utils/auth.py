@@ -1,24 +1,31 @@
 from datetime import datetime, timedelta
 from typing import Optional
 import jwt
-import secrets
 from passlib.context import CryptContext
-from fastapi import HTTPException, Depends, Request
+from fastapi import HTTPException, Depends, Request, Cookie
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from config import JWT_SECRET_KEY, JWT_ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+import logging
+from pydantic import BaseModel
+
+logger = logging.getLogger('nightclub')
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)  # Make it optional to allow cookie auth
 
-# In-memory storage for CSRF tokens (in production, use Redis)
-csrf_tokens = {}
+class SessionData(BaseModel):
+    """Session data model for authenticated users"""
+    user_id: int
+    username: str
+    role: str
+    expires: datetime
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash"""
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
-    """Generate password hash"""
+    """Get password hash"""
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -33,87 +40,75 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
-def generate_csrf_token(user_id: int) -> str:
-    """Generate CSRF token for user"""
-    token = secrets.token_urlsafe(32)
-    csrf_tokens[user_id] = {
-        "token": token,
-        "expires": datetime.utcnow() + timedelta(hours=24)
-    }
-    return token
-
-def verify_csrf_token(user_id: int, token: str) -> bool:
-    """Verify CSRF token"""
-    stored_data = csrf_tokens.get(user_id)
-    if not stored_data:
-        return False
-    
-    if datetime.utcnow() > stored_data["expires"]:
-        del csrf_tokens[user_id]
-        return False
-    
-    return stored_data["token"] == token
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Get current user from JWT token"""
+def decode_token(token: str) -> dict:
+    """Decode and verify JWT token"""
     try:
-        token = credentials.credentials
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        
-        print(f"Token payload: {payload}")
-        
-        # Ensure user_id is available (from either user_id or sub field)
-        user_id = payload.get("user_id") or int(payload.get("sub", 0))
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token: missing user identification")
-        
-        # Create standardized user object
-        user = {
-            "user_id": user_id,
-            "username": payload.get("username"),
-            "role": payload.get("role", "user"),
-            "sub": payload.get("sub", str(user_id))
-        }
-        
-        print(f"Current user: {user}")
-        return user
+        return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
-    except jwt.JWTError as e:
-        print(f"JWT Error: {str(e)}")
+    except jwt.PyJWTError as e:
         raise HTTPException(status_code=401, detail=f"Could not validate credentials: {str(e)}")
-    except ValueError as e:
-        print(f"Value Error: {str(e)}")
-        raise HTTPException(status_code=401, detail=f"Invalid token format: {str(e)}")
+
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    session: Optional[str] = Cookie(None, alias="nightclub_session")
+) -> dict:
+    """Get current user from either JWT token in Authorization header or session cookie"""
+    
+    # First try Authorization header
+    if credentials and credentials.credentials:
+        try:
+            payload = decode_token(credentials.credentials)
+        except HTTPException:
+            # If Authorization header token is invalid, fall back to cookie
+            if not session:
+                raise
+            payload = decode_token(session)
+    # Then try cookie
+    elif session:
+        payload = decode_token(session)
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail="No valid authentication credentials found"
+        )
+
+    # Ensure user_id is available (from either user_id or sub field)
+    user_id = payload.get("user_id") or int(payload.get("sub", 0))
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token: missing user identification"
+        )
+
+    # Create standardized user object
+    user = {
+        "user_id": user_id,
+        "username": payload.get("username"),
+        "role": payload.get("role", "user"),
+        "sub": payload.get("sub", str(user_id))
+    }
+
+    return user
 
 def check_role(allowed_roles: list):
     """Dependency to check user role"""
     async def role_checker(user: dict = Depends(get_current_user)):
-        print(f"Checking role. User role: {user.get('role')}, Allowed: {allowed_roles}")
         if user["role"] not in allowed_roles:
+            logger.warning(f"Access denied for role {user['role']}, required: {allowed_roles}")
             raise HTTPException(status_code=403, detail="Operation not permitted")
         return user
     return role_checker
 
-def verify_csrf():
-    """Dependency to verify CSRF token in requests"""
-    async def csrf_checker(request: Request, user: dict = Depends(get_current_user)):
-        if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
-            csrf_token = request.headers.get("X-CSRF-Token")
-            
-            # Skip CSRF for auth endpoints
-            if str(request.url.path).endswith('/auth/login') or str(request.url.path).endswith('/auth/register'):
-                return user
-            
-            if not csrf_token:
-                raise HTTPException(status_code=403, detail="CSRF token missing")
-            if not verify_csrf_token(user["user_id"], csrf_token):
-                raise HTTPException(status_code=403, detail="Invalid CSRF token")
-        
-        return user
-    return csrf_checker
-
-# Optional: Dependency for endpoints that don't require CSRF (for testing)
-async def get_current_user_optional_csrf(user: dict = Depends(get_current_user)):
-    """Get current user without CSRF verification (for testing)"""
-    return user
+async def verifier(
+    request: Request,
+    user: dict = Depends(get_current_user)
+) -> SessionData:
+    """Return session data without CSRF verification"""
+    return SessionData(
+        user_id=user["user_id"],
+        username=user["username"],
+        role=user["role"],
+        expires=datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )

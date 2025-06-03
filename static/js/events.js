@@ -11,13 +11,13 @@ async function loadEvents() {
         try {
             // Load events, categories, and zones
             const [eventsResponse, categoriesResponse, zonesResponse] = await Promise.allSettled([
-                apiRequest('/events'),
+                apiRequest('/events/'),
                 apiRequest('/events/categories'),
                 apiRequest('/events/zones')
             ]);
             
             if (eventsResponse.status === 'fulfilled') {
-                events = eventsResponse.value || [];
+                events = eventsResponse.value.events || [];
             } else {
                 console.warn('Failed to load events:', eventsResponse.reason);
                 events = [];
@@ -415,64 +415,64 @@ function showCreateEventModal() {
                                             </h6>
                                         </div>
                                         <div class="card-body">
-                                            <div class="row">
-                                                <div class="col-md-8">
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Название мероприятия *</label>
-                                                        <input type="text" class="form-control" name="title" required 
-                                                               placeholder="Введите название мероприятия">
-                                                    </div>
-                                                </div>
-                                                <div class="col-md-4">
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Категория</label>
-                                                        <select class="form-select" name="category_id">
-                                                            <option value="">Без категории</option>
-                                                            ${categories.map(cat => `
-                                                                <option value="${cat.category_id}">${cat.name}</option>
-                                                            `).join('')}
-                                                        </select>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            
-                                            <div class="mb-3">
-                                                <label class="form-label">Описание *</label>
-                                                <textarea class="form-control" name="description" rows="3" required
-                                                          placeholder="Опишите мероприятие"></textarea>
-                                            </div>
-                                            
-                                            <div class="row">
-                                                <div class="col-md-6">
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Дата и время *</label>
-                                                        <input type="datetime-local" class="form-control" name="event_date" required>
-                                                    </div>
-                                                </div>
-                                                <div class="col-md-6">
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Длительность (минуты) *</label>
-                                                        <input type="number" class="form-control" name="duration" required 
-                                                               min="30" value="120" placeholder="120">
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
+                            <div class="row">
+                                <div class="col-md-8">
+                                    <div class="mb-3">
+                                        <label class="form-label">Название мероприятия *</label>
+                                        <input type="text" class="form-control" name="title" required 
+                                               placeholder="Введите название мероприятия">
                                     </div>
-                                    
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label class="form-label">Категория</label>
+                                        <select class="form-select" name="category_id">
+                                            <option value="">Без категории</option>
+                                                            ${categories.map(cat => `
+                                                <option value="${cat.category_id}">${cat.name}</option>
+                                                            `).join('')}
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Описание *</label>
+                                <textarea class="form-control" name="description" rows="3" required
+                                          placeholder="Опишите мероприятие"></textarea>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Дата и время *</label>
+                                        <input type="datetime-local" class="form-control" name="event_date" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Длительность (минуты) *</label>
+                                        <input type="number" class="form-control" name="duration" required 
+                                               min="30" value="120" placeholder="120">
+                                                    </div>
+                                                </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
                                     <!-- Zones Configuration -->
                                     <div class="card">
                                         <div class="card-header">
                                             <h6 class="mb-0">
                                                 <i class="fas fa-map-marked-alt me-1"></i>Конфигурация зон
                                             </h6>
-                                        </div>
+                                    </div>
                                         <div class="card-body">
                                             <div class="alert alert-info">
                                                 <i class="fas fa-info-circle me-2"></i>
                                                 Выберите зоны, которые будут доступны для данного мероприятия, 
                                                 и укажите количество мест и цену для каждой зоны.
-                                            </div>
+                                </div>
                                             
                                             <div id="zonesConfiguration">
                                                 ${zones.map((zone, index) => `
@@ -511,10 +511,10 @@ function showCreateEventModal() {
                                                     </div>
                                                 `).join('')}
                                             </div>
-                                        </div>
                                     </div>
                                 </div>
-                                
+                            </div>
+                            
                                 <div class="col-lg-4">
                                     <!-- Summary -->
                                     <div class="card sticky-top" style="top: 20px;">
@@ -653,6 +653,13 @@ $(document).on('input', '.zone-seats, .zone-price', updateEventSummary);
 async function createEventWithZones() {
     console.log('Creating event with zones...');
     
+    // Check authentication first
+    if (!currentUser) {
+        showError('Пожалуйста, войдите в систему');
+        showLoginModal();
+        return;
+    }
+    
     const form = document.getElementById('createEventForm');
     const submitBtn = document.getElementById('createEventBtn');
     const originalText = submitBtn.innerHTML;
@@ -689,7 +696,7 @@ async function createEventWithZones() {
         const price = parseFloat(priceInput.value);
         
         if (!seats || seats < 1 || !price || price < 0) {
-            showError(`Заполните корректно данные для всех выбранных зон`);
+            showError('Заполните корректно данные для всех выбранных зон');
             return;
         }
         
@@ -710,7 +717,8 @@ async function createEventWithZones() {
             description: description,
             event_date: new Date(eventDate).toISOString(),
             duration: duration,
-            zones: selectedZones
+            zones: selectedZones,
+            status: "planned"  // Set initial status
         };
         
         // Add category if selected
@@ -721,7 +729,7 @@ async function createEventWithZones() {
         
         console.log('Sending event data:', eventData);
         
-        const response = await apiRequest('/events', {
+        const response = await apiRequest('/events/', {
             method: 'POST',
             body: JSON.stringify(eventData)
         });
@@ -730,12 +738,16 @@ async function createEventWithZones() {
         
         // Close modal and reload events
         $('#createEventModal').modal('hide');
-        showSuccess('Мероприятие с зонами успешно создано');
+        showSuccess('Мероприятие успешно создано');
         loadEvents();
         
     } catch (error) {
         console.error('Create event error:', error);
-        showError(error.message || 'Не удалось создать мероприятие');
+        if (error.message === 'Unauthorized') {
+            showLoginModal();
+        } else {
+            showError(error.message || 'Не удалось создать мероприятие');
+        }
     } finally {
         // Restore submit button
         submitBtn.disabled = false;
@@ -750,8 +762,8 @@ async function showBookingModal(eventId) {
         
         if (!event.zones || event.zones.length === 0) {
             showError('Конфигурация зон для этого мероприятия недоступна');
-            return;
-        }
+        return;
+    }
         
         let html = `
             <div class="modal fade" id="bookingModal" tabindex="-1">
@@ -778,19 +790,19 @@ async function showBookingModal(eventId) {
                                                     <div class="card zone-card ${isUnavailable ? 'disabled' : 'selectable'}" 
                                                          onclick="${!isUnavailable ? `selectZone(${zone.zone_id}, ${eventId})` : ''}"
                                                          style="${isUnavailable ? 'opacity: 0.5; cursor: not-allowed;' : 'cursor: pointer;'}">
-                                                        <div class="card-body text-center">
+                                                    <div class="card-body text-center">
                                                             <h6>${zone.zone_name}</h6>
                                                             <p class="text-muted mb-2">${zone.zone_description || 'Стандартная зона'}</p>
                                                             <div class="d-flex justify-content-between align-items-center">
                                                                 <span class="badge ${isUnavailable ? 'bg-danger' : 'bg-primary'}">
                                                                     ${availableSeats} мест
-                                                                </span>
+                                                        </span>
                                                                 <strong class="text-success">
                                                                     ${formatPrice(zone.zone_price)}
                                                                 </strong>
-                                                            </div>
-                                                        </div>
                                                     </div>
+                                                </div>
+                                            </div>
                                                 </div>
                                             `;
                                         }).join('')}
@@ -988,13 +1000,15 @@ async function deleteEvent(eventId) {
     
     try {
         await apiRequest(`/events/${eventId}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            credentials: 'include'
         });
         
         showSuccess('Мероприятие успешно удалено');
         loadEvents();
     } catch (error) {
-        // Error is handled by apiRequest
+        console.error('Delete event error:', error);
+        showError(error.message || 'Не удалось удалить мероприятие');
     }
 }
 

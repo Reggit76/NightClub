@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from database import get_db_cursor
-from utils.auth import get_current_user, verify_csrf
+from utils.auth import get_current_user, verifier, SessionData
 from utils.helpers import log_user_action, check_seat_availability
 
 router = APIRouter()
@@ -12,238 +12,187 @@ class BookingCreate(BaseModel):
     event_id: int
     seat_id: int
 
-class PaymentProcess(BaseModel):
-    booking_id: int
-    payment_method: str
-
-@router.get("/my-bookings")
-async def get_my_bookings(current_user: dict = Depends(get_current_user)):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT 
-                b.*,
-                e.title as event_title,
-                e.event_date,
-                e.description,
-                e.duration,
-                e.ticket_price,
-                s.seat_number,
-                z.name as zone_name,
-                t.status as payment_status,
-                t.payment_method,
-                t.transaction_date
-            FROM bookings b
-            JOIN events e ON b.event_id = e.event_id
-            JOIN seats s ON b.seat_id = s.seat_id
-            JOIN club_zones z ON s.zone_id = z.zone_id
-            LEFT JOIN transactions t ON b.booking_id = t.booking_id
-            WHERE b.user_id = %s
-            ORDER BY b.booking_date DESC
-            """,
-            (current_user["user_id"],)
-        )
-        bookings = cur.fetchall()
-        return [dict(booking) for booking in bookings]
-
-@router.get("/{booking_id}")
-async def get_booking_details(
-    booking_id: int,
-    current_user: dict = Depends(get_current_user)
-):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT 
-                b.*,
-                e.title as event_title,
-                e.event_date,
-                e.description,
-                e.duration,
-                e.ticket_price,
-                s.seat_number,
-                z.name as zone_name,
-                t.status as payment_status,
-                t.payment_method,
-                t.transaction_date
-            FROM bookings b
-            JOIN events e ON b.event_id = e.event_id
-            JOIN seats s ON b.seat_id = s.seat_id
-            JOIN club_zones z ON s.zone_id = z.zone_id
-            LEFT JOIN transactions t ON b.booking_id = t.booking_id
-            WHERE b.booking_id = %s AND b.user_id = %s
-            """,
-            (booking_id, current_user["user_id"])
-        )
-        booking = cur.fetchone()
-        
-        if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found")
-            
-        return dict(booking)
+class BookingUpdate(BaseModel):
+    status: str
 
 @router.post("/", status_code=201)
 async def create_booking(
     booking: BookingCreate,
-    current_user: dict = Depends(get_current_user)  # Simplified for now
+    session: SessionData = Depends(verifier)
 ):
-    print(f"Creating booking: {booking.dict()} for user: {current_user}")
-    
+    """Create a new booking"""
     with get_db_cursor(commit=True) as cur:
-        # Check if event exists and is in the future
+        # Check if event exists and is available for booking
         cur.execute(
-            "SELECT * FROM events WHERE event_id = %s AND event_date > NOW()",
-            (booking.event_id,)
+            """
+            SELECT e.*, ez.zone_id, ez.available_seats, ez.zone_price
+            FROM events e
+            JOIN event_zones ez ON e.event_id = ez.event_id
+            JOIN seats s ON s.zone_id = ez.zone_id
+            WHERE e.event_id = %s AND s.seat_id = %s
+            """,
+            (booking.event_id, booking.seat_id)
         )
         event = cur.fetchone()
+        
         if not event:
-            raise HTTPException(status_code=404, detail="Event not found or has already started")
+            raise HTTPException(status_code=404, detail="Event or seat not found")
         
-        print(f"Event found: {dict(event)}")
+        if event["status"] != "published":
+            raise HTTPException(status_code=400, detail="Event is not available for booking")
         
-        # Check if seat exists and is available
+        if event["event_date"] <= datetime.now():
+            raise HTTPException(status_code=400, detail="Event has already started or ended")
+        
+        # Check if seat is available
         if not check_seat_availability(booking.event_id, booking.seat_id):
-            raise HTTPException(status_code=400, detail="Seat is not available")
-        
-        print(f"Seat is available")
+            raise HTTPException(status_code=400, detail="Seat is already booked")
         
         # Create booking
         cur.execute(
             """
-            INSERT INTO bookings (user_id, event_id, seat_id, status)
-            VALUES (%s, %s, %s, 'pending')
-            RETURNING booking_id
+            INSERT INTO bookings (event_id, user_id, seat_id, status, price)
+            VALUES (%s, %s, %s, 'pending', %s)
+            RETURNING booking_id, event_id, user_id, seat_id, status, created_at, price
             """,
-            (current_user["user_id"], booking.event_id, booking.seat_id)
+            (booking.event_id, session.user_id, booking.seat_id, event["zone_price"])
         )
-        booking_id = cur.fetchone()["booking_id"]
-        
-        print(f"Booking created with ID: {booking_id}")
+        new_booking = cur.fetchone()
         
         # Log the action
         log_user_action(
-            current_user["user_id"],
+            session.user_id,
             "create_booking",
             {
-                "booking_id": booking_id,
+                "booking_id": new_booking["booking_id"],
                 "event_id": booking.event_id,
                 "seat_id": booking.seat_id
             }
         )
         
-        return {"booking_id": booking_id, "message": "Booking created successfully"}
+        return new_booking
 
-@router.post("/pay")
-async def process_payment(
-    payment: PaymentProcess,
-    current_user: dict = Depends(get_current_user)  # Simplified for now
-):
-    print(f"Processing payment: {payment.dict()} for user: {current_user}")
-    
-    with get_db_cursor(commit=True) as cur:
-        # Check if booking belongs to current user and is pending
+@router.get("/my")
+async def get_my_bookings(session: SessionData = Depends(verifier)):
+    """Get user's bookings"""
+    with get_db_cursor() as cur:
         cur.execute(
             """
-            SELECT b.*, e.ticket_price
+            SELECT b.*, e.title as event_title, e.event_date,
+                   s.seat_number, z.name as zone_name
             FROM bookings b
             JOIN events e ON b.event_id = e.event_id
-            WHERE b.booking_id = %s AND b.user_id = %s AND b.status = 'pending'
+            JOIN seats s ON b.seat_id = s.seat_id
+            JOIN zones z ON s.zone_id = z.zone_id
+            WHERE b.user_id = %s
+            ORDER BY e.event_date DESC
             """,
-            (payment.booking_id, current_user["user_id"])
+            (session.user_id,)
+        )
+        bookings = cur.fetchall()
+        return bookings
+
+@router.put("/{booking_id}")
+async def update_booking(
+    booking_id: int,
+    booking_update: BookingUpdate,
+    session: SessionData = Depends(verifier)
+):
+    """Update booking status"""
+    with get_db_cursor(commit=True) as cur:
+        # Check if booking exists and belongs to user
+        cur.execute(
+            """
+            SELECT b.*, e.status as event_status
+            FROM bookings b
+            JOIN events e ON b.event_id = e.event_id
+            WHERE b.booking_id = %s
+            """,
+            (booking_id,)
         )
         booking = cur.fetchone()
         
         if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found or already processed")
+            raise HTTPException(status_code=404, detail="Booking not found")
         
-        print(f"Booking found: {dict(booking)}")
+        if booking["user_id"] != session.user_id and session.role not in ["admin", "moderator"]:
+            raise HTTPException(status_code=403, detail="Not authorized to update this booking")
         
-        # Create transaction record
-        cur.execute(
-            """
-            INSERT INTO transactions (booking_id, user_id, amount, payment_method, status)
-            VALUES (%s, %s, %s, %s, 'completed')
-            RETURNING transaction_id
-            """,
-            (payment.booking_id, current_user["user_id"], 
-             booking["ticket_price"], payment.payment_method)
-        )
-        transaction_id = cur.fetchone()["transaction_id"]
-        
-        print(f"Transaction created with ID: {transaction_id}")
+        if booking["event_status"] == "cancelled":
+            raise HTTPException(status_code=400, detail="Cannot update booking for cancelled event")
         
         # Update booking status
         cur.execute(
-            "UPDATE bookings SET status = 'confirmed' WHERE booking_id = %s",
-            (payment.booking_id,)
+            """
+            UPDATE bookings
+            SET status = %s
+            WHERE booking_id = %s
+            RETURNING *
+            """,
+            (booking_update.status, booking_id)
         )
-        
-        print(f"Booking {payment.booking_id} confirmed")
+        updated_booking = cur.fetchone()
         
         # Log the action
         log_user_action(
-            current_user["user_id"],
-            "process_payment",
+            session.user_id,
+            "update_booking",
             {
-                "booking_id": payment.booking_id,
-                "transaction_id": transaction_id,
-                "amount": float(booking["ticket_price"]),
-                "payment_method": payment.payment_method
+                "booking_id": booking_id,
+                "new_status": booking_update.status
             }
         )
         
-        return {"message": "Payment processed successfully", "transaction_id": transaction_id}
+        return updated_booking
 
 @router.delete("/{booking_id}")
 async def cancel_booking(
     booking_id: int,
-    current_user: dict = Depends(get_current_user)  # Simplified for now
+    session: SessionData = Depends(verifier)
 ):
-    print(f"Canceling booking {booking_id} for user: {current_user}")
-    
+    """Cancel booking"""
     with get_db_cursor(commit=True) as cur:
-        # Check if booking belongs to current user and can be cancelled
+        # Check if booking exists and belongs to user
         cur.execute(
             """
-            SELECT b.*, e.event_date
+            SELECT b.*, e.event_date, e.status as event_status
             FROM bookings b
             JOIN events e ON b.event_id = e.event_id
-            WHERE b.booking_id = %s AND b.user_id = %s AND b.status IN ('pending', 'confirmed')
+            WHERE b.booking_id = %s
             """,
-            (booking_id, current_user["user_id"])
+            (booking_id,)
         )
         booking = cur.fetchone()
         
         if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found or cannot be cancelled")
+            raise HTTPException(status_code=404, detail="Booking not found")
         
-        print(f"Booking found: {dict(booking)}")
+        if booking["user_id"] != session.user_id and session.role not in ["admin", "moderator"]:
+            raise HTTPException(status_code=403, detail="Not authorized to cancel this booking")
         
-        # Check if event hasn't started yet
         if booking["event_date"] <= datetime.now():
-            raise HTTPException(status_code=400, detail="Cannot cancel booking for event that has already started")
+            raise HTTPException(status_code=400, detail="Cannot cancel booking for past event")
+        
+        if booking["event_status"] == "cancelled":
+            raise HTTPException(status_code=400, detail="Event is already cancelled")
         
         # Cancel booking
         cur.execute(
-            "UPDATE bookings SET status = 'cancelled' WHERE booking_id = %s",
+            """
+            UPDATE bookings
+            SET status = 'cancelled'
+            WHERE booking_id = %s
+            RETURNING *
+            """,
             (booking_id,)
         )
-        
-        print(f"Booking {booking_id} cancelled")
-        
-        # If there was a payment, mark transaction as refunded
-        cur.execute(
-            "UPDATE transactions SET status = 'refunded' WHERE booking_id = %s",
-            (booking_id,)
-        )
-        
-        print(f"Transaction refunded for booking {booking_id}")
+        cancelled_booking = cur.fetchone()
         
         # Log the action
         log_user_action(
-            current_user["user_id"],
+            session.user_id,
             "cancel_booking",
             {"booking_id": booking_id}
         )
         
-        return {"message": "Booking cancelled successfully"}
+        return cancelled_booking

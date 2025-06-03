@@ -7,7 +7,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
 import uvicorn
 from config import API_PREFIX
-from utils.auth import get_current_user, generate_csrf_token
+from utils.auth import get_current_user
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -41,7 +41,7 @@ app = FastAPI(
     - 👥 User management with role-based access
     - 🏛️ Admin panel with audit logs
     - 💳 Payment processing simulation
-    - 🔐 CSRF protection for state-changing operations
+    - 🔐 Secure JWT authentication
     
     ## User Roles
     - **Admin**: Full access to all features including audit logs
@@ -60,8 +60,7 @@ app.add_middleware(
     allow_origins=["*"],  # In production, replace with actual frontend domain
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["X-CSRF-Token"]
+    allow_headers=["*"]
 )
 
 # Custom middleware for development and security headers
@@ -108,7 +107,7 @@ async def health_check():
         "database": db_status,
         "features": {
             "zone_pricing": True,
-            "csrf_protection": True,
+            "jwt_auth": True,
             "role_based_access": True,
             "audit_logs": True
         }
@@ -140,14 +139,6 @@ except Exception as e:
     logger.error(f"❌ Error setting up routers: {e}")
     raise
 
-# CSRF token endpoint
-@app.get(f"{API_PREFIX}/csrf-token")
-async def get_csrf_token(current_user: dict = Depends(get_current_user)):
-    """Get CSRF token for authenticated users"""
-    token = generate_csrf_token(current_user["user_id"])
-    logger.info(f"🔐 CSRF token generated for user {current_user['user_id']}")
-    return {"csrf_token": token}
-
 # System info endpoint (for debugging in development)
 @app.get(f"{API_PREFIX}/system-info")
 async def get_system_info():
@@ -157,7 +148,7 @@ async def get_system_info():
         "api_prefix": API_PREFIX,
         "features": {
             "zone_based_pricing": True,
-            "csrf_protection": True,
+            "jwt_auth": True,
             "role_restrictions": True,
             "audit_logging": True,
             "static_pages": True
@@ -251,79 +242,11 @@ async def internal_error_handler(request: Request, exc: Exception):
         content={"detail": "Internal server error"}
     )
 
-# Specific routes for static pages
-@app.get("/profile.html")
-async def serve_profile_page():
-    """Serve static profile page"""
-    static_file = os.path.join("static", "profile.html")
-    if os.path.exists(static_file):
-        return FileResponse(static_file)
-    else:
-        raise HTTPException(status_code=404, detail="Profile page not found")
-
-@app.get("/admin-dashboard.html")
-async def serve_admin_dashboard():
-    """Serve static admin dashboard page"""
-    static_file = os.path.join("static", "admin-dashboard.html")
-    if os.path.exists(static_file):
-        return FileResponse(static_file)
-    else:
-        raise HTTPException(status_code=404, detail="Admin dashboard not found")
-
-# Enhanced root endpoint
-@app.get("/")
-async def root():
-    """Root endpoint with system information"""
-    return {
-        "message": "Night Club Booking System API v2.0",
-        "documentation": "/docs",
-        "admin_dashboard": "/admin-dashboard.html",
-        "profile_page": "/profile.html",
-        "health_check": "/health",
-        "features": [
-            "Zone-based event pricing",
-            "CSRF protection",
-            "Role-based access control",
-            "Audit logging",
-            "Static page optimization"
-        ]
-    }
-
-# Handle SPA routes - THIS MUST BE LAST!
-@app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
-    """Serve SPA for all non-API routes - MUST BE DEFINED LAST"""
-    # Don't serve SPA for API routes (double check)
-    if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc"):
-        raise HTTPException(status_code=404, detail="API route not found")
-    
-    # Don't serve SPA for static files
-    if full_path.startswith("static/"):
-        raise HTTPException(status_code=404, detail="Static file not found")
-    
-    # Check for specific static pages first
-    if full_path == "profile":
-        return await serve_profile_page()
-    elif full_path == "admin-dashboard":
-        return await serve_admin_dashboard()
-    
-    # Serve main SPA
-    index_path = os.path.join("static", "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    else:
-        raise HTTPException(status_code=404, detail="Application not found")
+# JWT session verification endpoint
+@app.get("/session/verify")
+async def verify_session(current_user: dict = Depends(get_current_user)):
+    """Verify JWT token and return user information"""
+    return current_user
 
 if __name__ == "__main__":
-    # Development server configuration
-    logger.info("🔧 Starting development server...")
-    uvicorn.run(
-        "main:app", 
-        host="0.0.0.0", 
-        port=8000, 
-        reload=True,
-        reload_dirs=["./"],
-        reload_excludes=["*.log", "*.tmp"],
-        log_level="info",
-        access_log=True
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

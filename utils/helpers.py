@@ -7,6 +7,19 @@ from typing import List, Dict, Any, Optional
 import re
 import json
 from database import get_db_cursor
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('debug.log'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger('nightclub')
 
 def validate_phone_number(phone: str) -> bool:
     """Validate phone number format"""
@@ -206,14 +219,70 @@ def calculate_revenue_by_period(days: int = 30) -> Dict[str, Any]:
             "by_payment_method": [dict(method) for method in payment_method_stats]
         }
 
-def log_user_action(user_id: int, action: str, details: Optional[Dict[str, Any]] = None):
-    """Log user action to audit_logs table"""
-    with get_db_cursor(commit=True) as cur:
-        details_json = json.dumps(details) if details else None
-        cur.execute("""
-            INSERT INTO audit_logs (user_id, action, details)
-            VALUES (%s, %s, %s)
-        """, (user_id, action, details_json))
+def log_api_request(
+    endpoint: str,
+    method: str,
+    params: Optional[dict] = None,
+    body: Optional[Any] = None,
+    user_id: Optional[int] = None,
+    session_id: Optional[str] = None,
+    error: Optional[Exception] = None
+) -> None:
+    """
+    Log detailed API request information for debugging
+    """
+    try:
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "endpoint": endpoint,
+            "method": method,
+            "params": params,
+            "user_id": user_id,
+            "session_id": session_id,
+            "has_error": error is not None
+        }
+
+        if body:
+            try:
+                # Try to convert body to dict if it's a Pydantic model
+                if hasattr(body, "dict"):
+                    body_dict = body.dict()
+                else:
+                    body_dict = body
+                log_entry["body"] = body_dict
+            except Exception as e:
+                log_entry["body"] = str(body)
+                log_entry["body_parse_error"] = str(e)
+
+        if error:
+            log_entry["error"] = {
+                "type": type(error).__name__,
+                "message": str(error),
+                "details": getattr(error, "detail", None)
+            }
+
+        logger.debug(f"API Request: {json.dumps(log_entry, indent=2, default=str)}")
+
+        # If there's an error, log it as error level
+        if error:
+            logger.error(f"API Error in {method} {endpoint}: {str(error)}")
+
+    except Exception as e:
+        logger.error(f"Error while logging API request: {str(e)}")
+
+def log_user_action(user_id: int, action: str, details: dict) -> None:
+    """Log user action to database"""
+    try:
+        with get_db_cursor(commit=True) as cur:
+            cur.execute(
+                """
+                INSERT INTO audit_logs (user_id, action, details)
+                VALUES (%s, %s, %s)
+                """,
+                (user_id, action, json.dumps(details))
+            )
+    except Exception as e:
+        logger.error(f"Failed to log user action: {str(e)}")
 
 def get_popular_events(limit: int = 5) -> List[Dict[str, Any]]:
     """Get most popular events based on booking count"""
