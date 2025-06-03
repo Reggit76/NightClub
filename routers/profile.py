@@ -20,10 +20,14 @@ class PasswordChange(BaseModel):
 
 @router.get("/")
 async def get_profile(current_user: dict = Depends(get_current_user)):
+    """Get current user's profile information"""
+    print(f"Getting profile for user: {current_user}")
+    
     try:
         with get_db_cursor() as cur:
             # Get user ID from token
             user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
+            print(f"Using user_id: {user_id}")
             
             # Get user data with role
             cur.execute(
@@ -39,8 +43,11 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
             profile = cur.fetchone()
             
             if not profile:
+                print(f"Profile not found for user_id: {user_id}")
                 raise HTTPException(status_code=404, detail="Profile not found")
                 
+            print(f"Profile found: {dict(profile)}")
+            
             # Get user statistics
             cur.execute(
                 """
@@ -60,6 +67,8 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
                 "last_booking_date": None
             }
             
+            print(f"Stats found: {dict(stats)}")
+            
             # Convert to dict and add stats
             result = dict(profile)
             result["stats"] = dict(stats)
@@ -72,8 +81,12 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
 @router.put("/")
 async def update_profile(
     profile_update: ProfileUpdate,
-    current_user: dict = Depends(get_current_user)  # Remove CSRF for now
+    current_user: dict = Depends(verify_csrf())
 ):
+    """Update current user's profile"""
+    print(f"Updating profile for user: {current_user}")
+    print(f"Update data: {profile_update.dict(exclude_unset=True)}")
+    
     try:
         with get_db_cursor(commit=True) as cur:
             user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
@@ -105,6 +118,7 @@ async def update_profile(
                     WHERE user_id = %s
                 """
                 cur.execute(query, params)
+                print(f"Updated existing profile for user_id: {user_id}")
             else:
                 # Create new profile
                 field_names = ["user_id"] + [field for field, value in profile_update.dict(exclude_unset=True).items() if value is not None]
@@ -116,6 +130,7 @@ async def update_profile(
                     VALUES ({placeholders})
                 """
                 cur.execute(query, field_values)
+                print(f"Created new profile for user_id: {user_id}")
             
             # Log the action
             log_user_action(
@@ -134,8 +149,11 @@ async def update_profile(
 @router.post("/change-password")
 async def change_password(
     password_data: PasswordChange,
-    current_user: dict = Depends(get_current_user)  # Remove CSRF for now
+    current_user: dict = Depends(verify_csrf())
 ):
+    """Change current user's password"""
+    print(f"Changing password for user: {current_user}")
+    
     try:
         with get_db_cursor(commit=True) as cur:
             user_id = current_user.get("user_id") or int(current_user.get("sub", 0))
@@ -156,6 +174,8 @@ async def change_password(
                 "UPDATE users SET password_hash = %s WHERE user_id = %s",
                 (new_password_hash, user_id)
             )
+            
+            print(f"Password changed successfully for user_id: {user_id}")
             
             # Log the action
             log_user_action(

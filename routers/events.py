@@ -81,8 +81,9 @@ async def get_categories():
         with get_db_cursor() as cur:
             cur.execute("SELECT * FROM event_categories ORDER BY name")
             categories = cur.fetchall()
-            return categories
+            return [dict(cat) for cat in categories]
     except Exception as e:
+        print(f"Error getting categories: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.get("/zones")
@@ -101,11 +102,15 @@ async def get_zones():
             zones = cur.fetchall()
             
             # Add available seats count (simplified for demo)
+            result = []
             for zone in zones:
-                zone['available_seats'] = zone['total_seats'] or 0
+                zone_dict = dict(zone)
+                zone_dict['available_seats'] = zone_dict['total_seats'] or 0
+                result.append(zone_dict)
             
-            return zones
+            return result
     except Exception as e:
+        print(f"Error getting zones: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.get("/")
@@ -161,21 +166,35 @@ async def get_events(
 @router.post("/", status_code=201)
 async def create_event(
     event: EventCreate,
-    current_user: dict = Depends(get_current_user)  # Remove CSRF for now to test
+    current_user: dict = Depends(verify_csrf())
 ):
     """Create a new event"""
+    print(f"=== CREATE EVENT ENDPOINT CALLED ===")
+    print(f"Request data: {event.dict()}")
+    print(f"Creating event by user: {current_user}")
+    
     # Check if user has admin or moderator role
-    if not current_user.get("role") or current_user["role"] not in ["admin", "moderator"]:
+    user_role = current_user.get("role")
+    print(f"User role: {user_role}")
+    
+    if not user_role or user_role not in ["admin", "moderator"]:
+        print(f"User role check failed. User role: {user_role}")
         raise HTTPException(status_code=403, detail="Недостаточно прав для создания мероприятий")
         
     try:
         with get_db_cursor(commit=True) as cur:
             # Validate category if provided
             if event.category_id:
+                print(f"Checking category: {event.category_id}")
                 cur.execute("SELECT * FROM event_categories WHERE category_id = %s", (event.category_id,))
-                if not cur.fetchone():
+                category = cur.fetchone()
+                if not category:
+                    print(f"Category {event.category_id} not found")
                     raise HTTPException(status_code=400, detail="Указанная категория не существует")
+                else:
+                    print(f"Category found: {dict(category)}")
             
+            print(f"Inserting event into database...")
             cur.execute(
                 """
                 INSERT INTO events (category_id, title, description, event_date, duration,
@@ -188,6 +207,7 @@ async def create_event(
                  current_user["user_id"])
             )
             new_event = cur.fetchone()
+            print(f"Event inserted successfully: {dict(new_event)}")
             
             # Log the action
             log_user_action(
@@ -201,21 +221,28 @@ async def create_event(
                 }
             )
             
-            return {
-                **new_event,
+            print(f"Event created successfully: {new_event}")
+            
+            result = {
+                **dict(new_event),
                 "booked_seats": 0,
                 "category_name": None,
                 "message": "Мероприятие успешно создано"
             }
+            print(f"Returning result: {result}")
+            return result
+            
     except Exception as e:
         print(f"Error creating event: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.put("/{event_id}")
 async def update_event(
     event_id: int,
     event: EventUpdate,
-    current_user: dict = Depends(get_current_user)  # Remove CSRF for now
+    current_user: dict = Depends(verify_csrf())
 ):
     """Update an existing event"""
     # Check if user has admin or moderator role
@@ -274,7 +301,7 @@ async def update_event(
                 }
             )
             
-            return updated_event
+            return dict(updated_event)
     except Exception as e:
         print(f"Error updating event: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
@@ -357,7 +384,7 @@ async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
 @router.delete("/{event_id}")
 async def delete_event(
     event_id: int,
-    current_user: dict = Depends(get_current_user)  # Remove CSRF for now
+    current_user: dict = Depends(verify_csrf())
 ):
     """Delete an event"""
     # Check if user has admin or moderator role

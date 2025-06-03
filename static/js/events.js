@@ -611,7 +611,7 @@ async function updateEvent(eventId) {
 
 // Delete event
 async function deleteEvent(eventId) {
-    if (!confirm('Вы уверены, что хотите удалить это мероприятие? Это действие нельзя отменить.')) {
+    if (!confirm('Вы уверены, что хотите удалить это мероприятие?')) {
         return;
     }
     
@@ -807,3 +807,88 @@ $(document).on('click', '#confirmBookingBtn', async function() {
         submitBtn.prop('disabled', false).html(originalText);
     }
 });
+
+// Create event
+async function createEvent(event) {
+    try {
+        // Get CSRF token before making the request
+        await getCsrfToken();
+        
+        const response = await apiRequest('/events', {
+            method: 'POST',
+            body: JSON.stringify(event)
+        });
+        
+        showSuccess('Мероприятие успешно создано');
+        loadEvents();
+        return response;
+    } catch (error) {
+        throw error;
+    }
+}
+
+// Update event
+async function updateEvent(eventId, event) {
+    try {
+        // Get CSRF token before making the request
+        await getCsrfToken();
+        
+        const response = await apiRequest(`/events/${eventId}`, {
+            method: 'PUT',
+            body: JSON.stringify(event)
+        });
+        
+        showSuccess('Мероприятие успешно обновлено');
+        loadEvents();
+        return response;
+    } catch (error) {
+        throw error;
+    }
+}
+
+// Delete event
+async function deleteEvent(eventId) {
+    if (!confirm('Вы уверены, что хотите удалить это мероприятие?')) {
+        return;
+    }
+    
+    try {
+        // Get CSRF token before making the request
+        await getCsrfToken();
+        
+        await apiRequest(`/events/${eventId}`, {
+            method: 'DELETE'
+        });
+        
+        showSuccess('Мероприятие успешно удалено');
+        loadEvents();
+    } catch (error) {
+        throw error;
+    }
+}
+
+// Book event
+async function bookEvent(eventId, seatId) {
+    try {
+        if (!currentUser) {
+            showLoginPrompt();
+            return;
+        }
+        
+        // Get CSRF token before making the request
+        await getCsrfToken();
+        
+        const response = await apiRequest('/bookings', {
+            method: 'POST',
+            body: JSON.stringify({
+                event_id: eventId,
+                seat_id: seatId
+            })
+        });
+        
+        showSuccess('Бронирование успешно создано');
+        return response;
+    } catch (error) {
+        throw error;
+    }
+}

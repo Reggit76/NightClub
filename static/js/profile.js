@@ -319,20 +319,26 @@ function initProfileFormHandler() {
         }
         
         try {
-            await apiRequest('/profile', {
+            // Get CSRF token before making the request
+            await getCsrfToken();
+            
+            const response = await apiRequest('/profile', {
                 method: 'PUT',
                 body: JSON.stringify(formData)
             });
-            
-            showSuccess('Профиль успешно обновлен');
             
             // Update stored original data
             if (window.originalProfileData) {
                 Object.assign(window.originalProfileData, formData);
             }
             
+            showSuccess('Профиль успешно обновлен');
+            
+            // Reload profile to get updated data
+            loadProfile();
+            
         } catch (error) {
-            // Error is handled by apiRequest
+            showError(error.message || 'Не удалось обновить профиль');
         } finally {
             // Restore button state
             submitBtn.prop('disabled', false).html(originalText);
@@ -370,36 +376,39 @@ function initPasswordFormHandler() {
         const submitBtn = $(this).find('button[type="submit"]');
         const originalText = submitBtn.html();
         
-        const currentPassword = this.current_password.value;
-        const newPassword = this.new_password.value;
-        const confirmPassword = this.confirm_password.value;
-        
-        // Client-side validation
-        if (newPassword !== confirmPassword) {
-            showError('Новые пароли не совпадают');
-            return;
-        }
-        
-        if (newPassword.length < 6) {
-            showError('Пароль должен содержать минимум 6 символов');
-            return;
-        }
-        
-        if (newPassword === currentPassword) {
-            showError('Новый пароль должен отличаться от текущего');
-            return;
-        }
-        
         // Show loading state
         submitBtn.prop('disabled', true)
-                 .html('<i class="fas fa-spinner fa-spin me-1"></i>Изменение...');
+                 .html('<i class="fas fa-spinner fa-spin me-1"></i>Изменение пароля...');
         
         const formData = {
-            current_password: currentPassword,
-            new_password: newPassword
+            current_password: this.current_password.value,
+            new_password: this.new_password.value,
+            confirm_password: this.confirm_password.value
         };
         
+        // Validation
+        if (!formData.current_password) {
+            showError('Введите текущий пароль');
+            submitBtn.prop('disabled', false).html(originalText);
+            return;
+        }
+        
+        if (formData.new_password !== formData.confirm_password) {
+            showError('Пароли не совпадают');
+            submitBtn.prop('disabled', false).html(originalText);
+            return;
+        }
+        
+        if (formData.new_password.length < 6) {
+            showError('Новый пароль должен содержать минимум 6 символов');
+            submitBtn.prop('disabled', false).html(originalText);
+            return;
+        }
+        
         try {
+            // Get CSRF token before making the request
+            await getCsrfToken();
+            
             await apiRequest('/profile/change-password', {
                 method: 'POST',
                 body: JSON.stringify(formData)
@@ -409,8 +418,13 @@ function initPasswordFormHandler() {
             this.reset();
             $('#passwordStrength').html('');
             
+            // Clear password fields
+            this.current_password.value = '';
+            this.new_password.value = '';
+            this.confirm_password.value = '';
+            
         } catch (error) {
-            // Error is handled by apiRequest
+            showError(error.message || 'Не удалось изменить пароль');
         } finally {
             // Restore button state
             submitBtn.prop('disabled', false).html(originalText);

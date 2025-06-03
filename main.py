@@ -37,9 +37,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Security middleware - add trusted hosts in production
-# app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
-
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -66,31 +63,6 @@ async def add_no_cache_headers(request: Request, call_next):
     
     return response
 
-# Import and include routers
-try:
-    from routers import auth, events, bookings, admin, profile
-    
-    # API routes
-    app.include_router(auth.router, prefix=f"{API_PREFIX}/auth", tags=["Authentication"])
-    app.include_router(events.router, prefix=f"{API_PREFIX}/events", tags=["Events"])
-    app.include_router(bookings.router, prefix=f"{API_PREFIX}/bookings", tags=["Bookings"])
-    app.include_router(admin.router, prefix=f"{API_PREFIX}/admin", tags=["Administration"])
-    app.include_router(profile.router, prefix=f"{API_PREFIX}/profile", tags=["User Profile"])
-    
-    logger.info("All routers loaded successfully")
-    logger.info("Available routes:")
-    for route in app.routes:
-        if hasattr(route, 'path') and route.path.startswith('/api/'):
-            logger.info(f"  {route.methods} {route.path}")
-    
-except ImportError as e:
-    logger.error(f"Failed to import routers: {e}")
-    logger.error("Make sure all router files exist and have no syntax errors")
-    raise
-except Exception as e:
-    logger.error(f"Error setting up routers: {e}")
-    raise
-
 # Health check endpoint
 @app.get("/health")
 async def health_check():
@@ -100,6 +72,32 @@ async def health_check():
         "service": "nightclub-booking-system",
         "version": "1.0.0"
     }
+
+# Import and include routers BEFORE other route definitions
+try:
+    from routers import auth, events, bookings, admin, profile
+    
+    # API routes - These must be defined BEFORE the catch-all route
+    app.include_router(auth.router, prefix=f"{API_PREFIX}/auth", tags=["Authentication"])
+    app.include_router(events.router, prefix=f"{API_PREFIX}/events", tags=["Events"])
+    app.include_router(bookings.router, prefix=f"{API_PREFIX}/bookings", tags=["Bookings"])
+    app.include_router(admin.router, prefix=f"{API_PREFIX}/admin", tags=["Administration"])
+    app.include_router(profile.router, prefix=f"{API_PREFIX}/profile", tags=["User Profile"])
+    
+    logger.info("All routers loaded successfully")
+    
+    # Debug: Print all registered routes
+    for route in app.routes:
+        if hasattr(route, 'path') and hasattr(route, 'methods'):
+            logger.info(f"Route: {route.methods} {route.path}")
+    
+except ImportError as e:
+    logger.error(f"Failed to import routers: {e}")
+    logger.error("Make sure all router files exist and have no syntax errors")
+    raise
+except Exception as e:
+    logger.error(f"Error setting up routers: {e}")
+    raise
 
 # CSRF token endpoint
 @app.get(f"{API_PREFIX}/csrf-token")
@@ -143,24 +141,6 @@ if os.path.exists(static_path):
 else:
     logger.warning(f"Static directory '{static_path}' not found")
 
-# Handle SPA routes - return index.html for any non-API routes
-@app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
-    """Serve SPA for all non-API routes"""
-    # Don't serve SPA for API routes
-    if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc"):
-        raise HTTPException(status_code=404, detail="API route not found")
-    
-    # Don't serve SPA for static files
-    if full_path.startswith("static/"):
-        raise HTTPException(status_code=404, detail="Static file not found")
-    
-    index_path = os.path.join("static", "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    else:
-        raise HTTPException(status_code=404, detail="Application not found")
-
 # Exception handlers
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: HTTPException):
@@ -200,6 +180,24 @@ async def internal_error_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal server error"}
     )
+
+# Handle SPA routes - THIS MUST BE LAST!
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    """Serve SPA for all non-API routes - MUST BE DEFINED LAST"""
+    # Don't serve SPA for API routes (double check)
+    if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc"):
+        raise HTTPException(status_code=404, detail="API route not found")
+    
+    # Don't serve SPA for static files
+    if full_path.startswith("static/"):
+        raise HTTPException(status_code=404, detail="Static file not found")
+    
+    index_path = os.path.join("static", "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    else:
+        raise HTTPException(status_code=404, detail="Application not found")
 
 if __name__ == "__main__":
     # Development server configuration

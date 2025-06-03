@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Creation Test - Night Club</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .log-area {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1><i class="fas fa-bug me-2"></i>Event Creation Diagnostic</h1>
+        <p class="text-muted">Диагностика проблемы создания мероприятий</p>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>1. Аутентификация</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">Username</label>
+                            <input type="text" class="form-control" id="username" value="admin">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Password</label>
+                            <input type="password" class="form-control" id="password" value="admin123">
+                        </div>
+                        <button class="btn btn-primary" onclick="testLogin()">Login</button>
+                        <div class="mt-2">
+                            <small>Token: <span id="tokenStatus">Не авторизован</span></small>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h5>2. Проверка маршрутов</h5>
+                    </div>
+                    <div class="card-body">
+                        <button class="btn btn-info btn-sm me-2" onclick="testRoute('GET', '/api/v1/events')">GET /events</button>
+                        <button class="btn btn-info btn-sm me-2" onclick="testRoute('GET', '/api/v1/events/categories')">GET /categories</button>
+                        <button class="btn btn-info btn-sm me-2" onclick="testRoute('OPTIONS', '/api/v1/events')">OPTIONS /events</button>
+                        <button class="btn btn-warning btn-sm" onclick="testRoute('POST', '/api/v1/events', true)">POST /events</button>
+                    </div>
+                </div>
+                
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h5>3. Создание мероприятия</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-2">
+                            <input type="text" class="form-control form-control-sm" id="eventTitle" placeholder="Название" value="Test Event">
+                        </div>
+                        <div class="mb-2">
+                            <textarea class="form-control form-control-sm" id="eventDesc" placeholder="Описание" rows="2">Test Description</textarea>
+                        </div>
+                        <div class="row mb-2">
+                            <div class="col-6">
+                                <input type="datetime-local" class="form-control form-control-sm" id="eventDate">
+                            </div>
+                            <div class="col-6">
+                                <input type="number" class="form-control form-control-sm" id="eventCapacity" placeholder="Вместимость" value="100">
+                            </div>
+                        </div>
+                        <div class="row mb-2">
+                            <div class="col-6">
+                                <input type="number" class="form-control form-control-sm" id="eventPrice" placeholder="Цена" value="1000">
+                            </div>
+                            <div class="col-6">
+                                <input type="number" class="form-control form-control-sm" id="eventDuration" placeholder="Длительность (мин)" value="120">
+                            </div>
+                        </div>
+                        <button class="btn btn-success" onclick="createEvent()">Создать мероприятие</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Лог</h5>
+                        <button class="btn btn-sm btn-outline-secondary float-end" onclick="clearLog()">Очистить</button>
+                    </div>
+                    <div class="card-body p-0">
+                        <div id="logArea" class="log-area"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        let currentToken = '';
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logArea = document.getElementById('logArea');
+            const colors = {
+                'info': '#000',
+                'success': '#28a745',
+                'error': '#dc3545',
+                'warning': '#ffc107'
+            };
+            
+            logArea.innerHTML += `<div style="color: ${colors[type]}">[${timestamp}] ${message}</div>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+        
+        function clearLog() {
+            document.getElementById('logArea').innerHTML = '';
+        }
+        
+        async function testLogin() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            log(`Attempting login: ${username}`, 'info');
+            
+            try {
+                const response = await fetch('/api/v1/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                log(`Login response: ${response.status} ${response.statusText}`, response.ok ? 'success' : 'error');
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    currentToken = data.access_token;
+                    document.getElementById('tokenStatus').textContent = 'Авторизован ✓';
+                    log(`Token received: ${currentToken.substring(0, 20)}...`, 'success');
+                    log(`User role: ${data.user?.role}`, 'info');
+                } else {
+                    const errorData = await response.json();
+                    log(`Login error: ${JSON.stringify(errorData)}`, 'error');
+                }
+            } catch (error) {
+                log(`Login exception: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testRoute(method, path, withData = false) {
+            log(`Testing ${method} ${path}`, 'info');
+            
+            const options = {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(currentToken ? { 'Authorization': `Bearer ${currentToken}` } : {})
+                }
+            };
+            
+            if (withData && method === 'POST') {
+                const tomorrow = new Date();
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                
+                const testData = {
+                    title: "Test Event",
+                    description: "Test Description",
+                    event_date: tomorrow.toISOString(),
+                    duration: 120,
+                    capacity: 100,
+                    ticket_price: 1000.0
+                };
+                
+                options.body = JSON.stringify(testData);
+                log(`Request body: ${JSON.stringify(testData, null, 2)}`, 'info');
+            }
+            
+            try {
+                const response = await fetch(path, options);
+                log(`${method} ${path}: ${response.status} ${response.statusText}`, response.ok ? 'success' : 'error');
+                
+                // Log response headers
+                const contentType = response.headers.get('content-type');
+                const allowHeader = response.headers.get('allow');
+                if (allowHeader) {
+                    log(`Allowed methods: ${allowHeader}`, 'info');
+                }
+                
+                // Try to get response body
+                try {
+                    const responseData = await response.json();
+                    log(`Response: ${JSON.stringify(responseData, null, 2)}`, response.ok ? 'success' : 'error');
+                } catch (e) {
+                    const responseText = await response.text();
+                    log(`Response text: ${responseText}`, response.ok ? 'success' : 'error');
+                }
+                
+            } catch (error) {
+                log(`${method} ${path} exception: ${error.message}`, 'error');
+            }
+        }
+        
+        async function createEvent() {
+            if (!currentToken) {
+                log('Please login first!', 'error');
+                return;
+            }
+            
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            
+            const eventData = {
+                title: document.getElementById('eventTitle').value,
+                description: document.getElementById('eventDesc').value,
+                event_date: document.getElementById('eventDate').value ? 
+                           new Date(document.getElementById('eventDate').value).toISOString() : 
+                           tomorrow.toISOString(),
+                duration: parseInt(document.getElementById('eventDuration').value),
+                capacity: parseInt(document.getElementById('eventCapacity').value),
+                ticket_price: parseFloat(document.getElementById('eventPrice').value)
+            };
+            
+            log('Creating event with data:', 'info');
+            log(JSON.stringify(eventData, null, 2), 'info');
+            
+            try {
+                const response = await fetch('/api/v1/events', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${currentToken}`
+                    },
+                    body: JSON.stringify(eventData)
+                });
+                
+                log(`Create event response: ${response.status} ${response.statusText}`, response.ok ? 'success' : 'error');
+                
+                const responseData = await response.json();
+                log(`Response data: ${JSON.stringify(responseData, null, 2)}`, response.ok ? 'success' : 'error');
+                
+            } catch (error) {
+                log(`Create event exception: ${error.message}`, 'error');
+            }
+        }
+        
+        // Set default date to tomorrow
+        document.addEventListener('DOMContentLoaded', function() {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(20, 0); // 8 PM
+            
+            const dateInput = document.getElementById('eventDate');
+            dateInput.value = tomorrow.toISOString().slice(0, 16);
+            
+            log('Event creation diagnostic tool loaded', 'info');
+            log('Click Login button to start testing', 'info');
+        });
+    </script>
+</body>
+</html>

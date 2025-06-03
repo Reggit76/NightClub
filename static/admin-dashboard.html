@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - Night Club</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .dashboard-card {
+            transition: transform 0.2s ease;
+            height: 100%;
+        }
+        .dashboard-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-online { background-color: #28a745; }
+        .status-warning { background-color: #ffc107; }
+        .status-offline { background-color: #dc3545; }
+        .hero-section {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 3rem 0;
+            margin-bottom: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Hero Section -->
+    <div class="hero-section">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-lg-8">
+                    <h1 class="display-4 fw-bold">
+                        <i class="fas fa-tachometer-alt me-3"></i>
+                        Admin Dashboard
+                    </h1>
+                    <p class="lead">Центр управления системой бронирования Night Club</p>
+                    <p class="mb-0">
+                        <span class="status-indicator status-online"></span>
+                        Система работает нормально
+                    </p>
+                </div>
+                <div class="col-lg-4 text-center">
+                    <div class="feature-icon">
+                        <i class="fas fa-shield-alt text-light"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Quick Links -->
+        <div class="row mb-5">
+            <div class="col-12">
+                <h2 class="mb-4">
+                    <i class="fas fa-rocket me-2"></i>Быстрый доступ
+                </h2>
+            </div>
+            
+            <!-- Main Application -->
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-home feature-icon text-primary"></i>
+                        <h5 class="card-title">Главное приложение</h5>
+                        <p class="card-text">Веб-интерфейс системы бронирования</p>
+                        <a href="/" class="btn btn-primary">
+                            <i class="fas fa-external-link-alt me-1"></i>
+                            Открыть
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API Documentation -->
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-book feature-icon text-info"></i>
+                        <h5 class="card-title">API Документация</h5>
+                        <p class="card-text">Swagger UI для тестирования API</p>
+                        <a href="/docs" class="btn btn-info" target="_blank">
+                            <i class="fas fa-code me-1"></i>
+                            Swagger UI
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API Testing -->
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-vial feature-icon text-success"></i>
+                        <h5 class="card-title">Тестирование API</h5>
+                        <p class="card-text">Простой интерфейс для тестирования</p>
+                        <a href="/api-test.html" class="btn btn-success">
+                            <i class="fas fa-play me-1"></i>
+                            Запустить тесты
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Documentation -->
+        <div class="row mb-5">
+            <div class="col-12">
+                <h2 class="mb-4">
+                    <i class="fas fa-book-open me-2"></i>Документация
+                </h2>
+            </div>
+
+            <!-- Developer Docs -->
+            <div class="col-lg-6 col-md-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-body">
+                        <i class="fas fa-code feature-icon text-warning"></i>
+                        <h5 class="card-title">Документация разработчика</h5>
+                        <p class="card-text">Полное руководство по API и архитектуре системы</p>
+                        <a href="/dev-docs.html" class="btn btn-warning">
+                            <i class="fas fa-laptop-code me-1"></i>
+                            Открыть документацию
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Health -->
+            <div class="col-lg-6 col-md-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-body">
+                        <i class="fas fa-heartbeat feature-icon text-danger"></i>
+                        <h5 class="card-title">Состояние системы</h5>
+                        <p class="card-text">Проверка работоспособности всех компонентов</p>
+                        <button class="btn btn-danger" onclick="checkSystemHealth()">
+                            <i class="fas fa-stethoscope me-1"></i>
+                            Проверить систему
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Information -->
+        <div class="row mb-5">
+            <div class="col-12">
+                <h2 class="mb-4">
+                    <i class="fas fa-info-circle me-2"></i>Информация о системе
+                </h2>
+            </div>
+
+            <!-- Test Accounts -->
+            <div class="col-lg-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0">
+                            <i class="fas fa-users me-2"></i>Тестовые аккаунты
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Username</th>
+                                        <th>Password</th>
+                                        <th>Role</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><code>admin</code></td>
+                                        <td><code>admin123</code></td>
+                                        <td><span class="badge bg-danger">Admin</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td><code>moderator</code></td>
+                                        <td><code>mod123</code></td>
+                                        <td><span class="badge bg-warning">Moderator</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td><code>user123</code></td>
+                                        <td><code>test123</code></td>
+                                        <td><span class="badge bg-info">User</span></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API Endpoints -->
+            <div class="col-lg-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0">
+                            <i class="fas fa-network-wired me-2"></i>Основные endpoints
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-unstyled">
+                            <li class="mb-2">
+                                <span class="badge bg-primary me-2">GET</span>
+                                <code>/api/v1/events</code>
+                            </li>
+                            <li class="mb-2">
+                                <span class="badge bg-success me-2">POST</span>
+                                <code>/api/v1/auth/login</code>
+                            </li>
+                            <li class="mb-2">
+                                <span class="badge bg-info me-2">GET</span>
+                                <code>/api/v1/admin/stats</code>
+                            </li>
+                            <li class="mb-2">
+                                <span class="badge bg-warning me-2">PUT</span>
+                                <code>/api/v1/profile</code>
+                            </li>
+                            <li class="mb-2">
+                                <span class="badge bg-danger me-2">DELETE</span>
+                                <code>/api/v1/bookings/{id}</code>
+                            </li>
+                        </ul>
+                        <a href="/docs" class="btn btn-sm btn-outline-primary">
+                            Все endpoints
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Management Tools -->
+        <div class="row mb-5">
+            <div class="col-12">
+                <h2 class="mb-4">
+                    <i class="fas fa-tools me-2"></i>Инструменты управления
+                </h2>
+            </div>
+
+            <!-- Database Management -->
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-database feature-icon text-dark"></i>
+                        <h5 class="card-title">База данных</h5>
+                        <p class="card-text">Управление данными и миграции</p>
+                        <button class="btn btn-dark" onclick="showDatabaseInfo()">
+                            <i class="fas fa-table me-1"></i>
+                            Информация о БД
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Log Viewer -->
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-file-alt feature-icon text-secondary"></i>
+                        <h5 class="card-title">Логи системы</h5>
+                        <p class="card-text">Просмотр системных логов</p>
+                        <button class="btn btn-secondary" onclick="viewLogs()">
+                            <i class="fas fa-eye me-1"></i>
+                            Просмотр логов
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration -->
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-cog feature-icon text-muted"></i>
+                        <h5 class="card-title">Конфигурация</h5>
+                        <p class="card-text">Настройки системы</p>
+                        <button class="btn btn-outline-secondary" onclick="showConfig()">
+                            <i class="fas fa-wrench me-1"></i>
+                            Настройки
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Display -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">
+                            <i class="fas fa-chart-line me-2"></i>Статус системы
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="systemStatus">
+                            <div class="text-center">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Загрузка...</span>
+                                </div>
+                                <p class="mt-2">Проверка состояния системы...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security -->
+        <div class="row mb-5">
+            <div class="col-12">
+                <h2 class="mb-4">
+                    <i class="fas fa-shield-alt me-2"></i>Безопасность
+                </h2>
+            </div>
+
+            <!-- Audit Logs -->
+            <div class="col-lg-12 mb-4">
+                <div class="card dashboard-card border-0 shadow-sm">
+                    <div class="card-header bg-light">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">
+                                <i class="fas fa-history me-2"></i>Журнал действий
+                            </h5>
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-secondary" onclick="exportLogs()">
+                                    <i class="fas fa-download me-1"></i>Экспорт
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="showLogFilters()">
+                                    <i class="fas fa-filter me-1"></i>Фильтры
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="auditLogsContainer">
+                            <div class="text-center py-4">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Загрузка...</span>
+                                </div>
+                                <p class="mt-2">Загрузка журнала действий...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="bg-light mt-5 py-4">
+        <div class="container text-center">
+            <p class="text-muted mb-0">
+                Night Club Booking System v1.0.0 | 
+                <a href="/">Главная</a> | 
+                <a href="/docs">API</a> | 
+                <a href="/dev-docs.html">Документация</a>
+            </p>
+        </div>
+    </footer>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // Check system health
+        async function checkSystemHealth() {
+            try {
+                const healthResponse = await fetch('/health');
+                const healthData = await healthResponse.json();
+                
+                const apiResponse = await fetch('/api/v1/events/categories');
+                const apiWorking = apiResponse.ok;
+                
+                updateSystemStatus({
+                    health: healthData,
+                    api_working: apiWorking,
+                    timestamp: new Date().toISOString()
+                });
+                
+            } catch (error) {
+                updateSystemStatus({
+                    error: error.message,
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+        
+        function updateSystemStatus(status) {
+            const statusDiv = document.getElementById('systemStatus');
+            
+            if (status.error) {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        Ошибка проверки системы: ${status.error}
+                    </div>
+                `;
+                return;
+            }
+            
+            const healthStatus = status.health.status === 'healthy' ? 'success' : 'warning';
+            const apiStatus = status.api_working ? 'success' : 'danger';
+            
+            statusDiv.innerHTML = `
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="alert alert-${healthStatus} mb-2">
+                            <i class="fas fa-heartbeat me-2"></i>
+                            Health Check: ${status.health.status}
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="alert alert-${apiStatus} mb-2">
+                            <i class="fas fa-plug me-2"></i>
+                            API: ${status.api_working ? 'Working' : 'Error'}
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="alert alert-info mb-2">
+                            <i class="fas fa-clock me-2"></i>
+                            Проверено: ${new Date(status.timestamp).toLocaleTimeString()}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function showDatabaseInfo() {
+            alert('Информация о базе данных:\n\nТаблицы: users, events, bookings, transactions, и др.\nДля подробной информации используйте diagnostic.py');
+        }
+        
+        function viewLogs() {
+            alert('Логи выводятся в консоль сервера.\nЗапустите сервер с python main.py для просмотра логов.');
+        }
+        
+        function showConfig() {
+            alert('Конфигурация находится в файлах:\n- config.py\n- .env\n\nПроверьте эти файлы для настройки системы.');
+        }
+        
+        // Load audit logs
+        function loadAuditLogs() {
+            // Check if user is admin
+            if (!currentUser || currentUser.role !== 'admin') {
+                $('#auditLogsContainer').html(`
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        Доступ запрещен. Только администраторы могут просматривать журнал действий.
+                    </div>
+                `);
+                return;
+            }
+
+            // Load logs using the existing loadAuditLogs function from admin.js
+            window.loadAuditLogs(1, {});
+        }
+        
+        // Auto-check system health and load logs on page load
+        $(document).ready(function() {
+            checkSystemHealth();
+            loadAuditLogs();
+        });
+    </script>
+</body>
+</html>

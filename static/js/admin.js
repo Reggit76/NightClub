@@ -6,6 +6,9 @@ async function loadAdminPanel() {
             apiRequest('/admin/stats')
         ]);
         
+        // Check if current user is admin
+        const isAdmin = currentUser && currentUser.role === 'admin';
+        
         let html = `
             <div class="admin-header">
                 <div class="row align-items-center">
@@ -14,6 +17,11 @@ async function loadAdminPanel() {
                         <p class="text-muted mb-0">Управление системой бронирования</p>
                     </div>
                     <div class="col-auto">
+                        ${isAdmin ? `
+                            <button class="btn btn-info me-2" onclick="showAuditLogsModal()">
+                                <i class="fas fa-history me-1"></i>Журнал действий
+                            </button>
+                        ` : ''}
                         <button class="btn btn-primary" onclick="navigateTo('events')">
                             <i class="fas fa-plus me-1"></i>Создать мероприятие
                         </button>
@@ -230,13 +238,19 @@ async function loadAdminPanel() {
                                                     </div>
                                                 </td>
                                                 <td>
-                                                    <select class="form-select form-select-sm role-selector" 
-                                                            onchange="updateUserRole(${user.user_id}, this.value)"
-                                                            ${user.user_id === currentUser.user_id ? 'disabled' : ''}>
-                                                        <option value="user" ${user.role === 'user' ? 'selected' : ''}>Пользователь</option>
-                                                        <option value="moderator" ${user.role === 'moderator' ? 'selected' : ''}>Модератор</option>
-                                                        <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Администратор</option>
-                                                    </select>
+                                                    ${isAdmin ? `
+                                                        <select class="form-select form-select-sm role-selector" 
+                                                                onchange="updateUserRole(${user.user_id}, this.value)"
+                                                                ${user.user_id === currentUser.user_id ? 'disabled' : ''}>
+                                                            <option value="user" ${user.role === 'user' ? 'selected' : ''}>Пользователь</option>
+                                                            <option value="moderator" ${user.role === 'moderator' ? 'selected' : ''}>Модератор</option>
+                                                            <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Администратор</option>
+                                                        </select>
+                                                    ` : `
+                                                        <span class="badge ${user.role === 'admin' ? 'bg-danger' : user.role === 'moderator' ? 'bg-warning' : 'bg-info'}">
+                                                            ${translateRole(user.role)}
+                                                        </span>
+                                                    `}
                                                 </td>
                                                 <td>
                                                     <div class="form-check form-switch">
@@ -663,4 +677,273 @@ if (!document.querySelector('#admin-additional-css')) {
     style.id = 'admin-additional-css';
     style.innerHTML = additionalCSS;
     document.head.appendChild(style);
+}
+
+// Load audit logs
+async function loadAuditLogs(page = 1, filters = {}) {
+    try {
+        const limit = 20;
+        const offset = (page - 1) * limit;
+        
+        // Build query parameters
+        const params = new URLSearchParams({
+            limit: limit.toString(),
+            offset: offset.toString()
+        });
+        
+        // Add filters if provided
+        if (filters.user_id) params.append('user_id', filters.user_id);
+        if (filters.action) params.append('action', filters.action);
+        if (filters.start_date) params.append('start_date', filters.start_date);
+        if (filters.end_date) params.append('end_date', filters.end_date);
+        
+        const response = await apiRequest(`/admin/logs?${params.toString()}`);
+        const { total, logs } = response;
+        
+        const totalPages = Math.ceil(total / limit);
+        
+        let html = `
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Дата</th>
+                            <th>Пользователь</th>
+                            <th>Действие</th>
+                            <th>Детали</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${logs.length > 0 ? logs.map(log => `
+                            <tr>
+                                <td>
+                                    <small class="text-muted">
+                                        ${formatDate(log.action_date)}
+                                    </small>
+                                </td>
+                                <td>
+                                    <div class="user-info">
+                                        <strong>${log.username}</strong>
+                                        ${log.full_name ? `<br><small class="text-muted">${log.full_name}</small>` : ''}
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="badge bg-info">
+                                        ${translateAction(log.action)}
+                                    </span>
+                                </td>
+                                <td>
+                                    <small>
+                                        ${formatLogDetails(log.details)}
+                                    </small>
+                                </td>
+                            </tr>
+                        `).join('') : `
+                            <tr>
+                                <td colspan="4" class="text-center py-4">
+                                    <i class="fas fa-info-circle text-muted me-2"></i>
+                                    Нет записей в журнале
+                                </td>
+                            </tr>
+                        `}
+                    </tbody>
+                </table>
+            </div>
+            
+            ${totalPages > 1 ? `
+                <nav class="mt-3">
+                    <ul class="pagination pagination-sm justify-content-center">
+                        ${page > 1 ? `
+                            <li class="page-item">
+                                <a class="page-link" href="#" onclick="loadAuditLogs(${page - 1}, ${JSON.stringify(filters)})">
+                                    <i class="fas fa-chevron-left"></i>
+                                </a>
+                            </li>
+                        ` : ''}
+                        
+                        ${Array.from({length: totalPages}, (_, i) => i + 1)
+                            .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === totalPages)
+                            .map(p => `
+                                <li class="page-item ${p === page ? 'active' : ''}">
+                                    <a class="page-link" href="#" onclick="loadAuditLogs(${p}, ${JSON.stringify(filters)})">
+                                        ${p}
+                                    </a>
+                                </li>
+                            `).join('')}
+                        
+                        ${page < totalPages ? `
+                            <li class="page-item">
+                                <a class="page-link" href="#" onclick="loadAuditLogs(${page + 1}, ${JSON.stringify(filters)})">
+                                    <i class="fas fa-chevron-right"></i>
+                                </a>
+                            </li>
+                        ` : ''}
+                    </ul>
+                </nav>
+            ` : ''}
+        `;
+        
+        $('#auditLogsContainer').html(html);
+        
+    } catch (error) {
+        $('#auditLogsContainer').html(`
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                Ошибка загрузки журнала действий: ${error.message || 'Неизвестная ошибка'}
+            </div>
+        `);
+    }
+}
+
+// Show audit logs modal
+function showAuditLogsModal() {
+    if (!currentUser || currentUser.role !== 'admin') {
+        showError('Только администраторы могут просматривать журнал действий');
+        return;
+    }
+
+    const modal = `
+        <div class="modal fade" id="auditLogsModal" tabindex="-1">
+            <div class="modal-dialog modal-xl">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <i class="fas fa-history me-2"></i>Журнал действий
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <!-- Filters -->
+                        <div class="row mb-3">
+                            <div class="col-md-3">
+                                <input type="date" class="form-control" id="logsStartDate" placeholder="От">
+                            </div>
+                            <div class="col-md-3">
+                                <input type="date" class="form-control" id="logsEndDate" placeholder="До">
+                            </div>
+                            <div class="col-md-3">
+                                <select class="form-select" id="logsActionFilter">
+                                    <option value="">Все действия</option>
+                                    <option value="login">Вход</option>
+                                    <option value="logout">Выход</option>
+                                    <option value="update_user">Изменение пользователя</option>
+                                    <option value="create_event">Создание мероприятия</option>
+                                    <option value="update_event">Изменение мероприятия</option>
+                                    <option value="delete_event">Удаление мероприятия</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <button class="btn btn-primary w-100" onclick="applyLogFilters()">
+                                    <i class="fas fa-filter me-1"></i>Применить
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div id="auditLogsContainer">
+                            <div class="text-center">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Загрузка...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+                        <button type="button" class="btn btn-primary" onclick="exportLogs()">
+                            <i class="fas fa-download me-1"></i>Экспорт
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Remove existing modal if any
+    $('#auditLogsModal').remove();
+    
+    // Add new modal to DOM and show it
+    $('body').append(modal);
+    $('#auditLogsModal').modal('show');
+    
+    // Load initial logs
+    loadAuditLogs();
+}
+
+// Apply log filters
+function applyLogFilters() {
+    const form = document.getElementById('logFiltersForm');
+    const formData = new FormData(form);
+    const filters = {};
+    
+    for (let [key, value] of formData.entries()) {
+        if (value) filters[key] = value;
+    }
+    
+    // Close modal
+    bootstrap.Modal.getInstance(document.getElementById('logFiltersModal')).hide();
+    
+    // Reload logs with filters
+    loadAuditLogs(1, filters);
+}
+
+// Export logs
+async function exportLogs() {
+    try {
+        const logs = await apiRequest('/admin/logs?limit=1000');
+        const csv = [
+            ['Дата', 'Пользователь', 'Действие', 'Детали'].join(','),
+            ...logs.logs.map(log => [
+                formatDate(log.action_date),
+                log.username,
+                translateAction(log.action),
+                JSON.stringify(log.details)
+            ].join(','))
+        ].join('\n');
+        
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `audit_logs_${formatDate(new Date())}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+    } catch (error) {
+        showError(error.message || 'Failed to export logs');
+    }
+}
+
+// Helper function to translate action names
+function translateAction(action) {
+    const actions = {
+        'login': 'Вход',
+        'logout': 'Выход',
+        'register': 'Регистрация',
+        'update_user': 'Изменение пользователя',
+        'create_event': 'Создание мероприятия',
+        'update_event': 'Изменение мероприятия',
+        'delete_event': 'Удаление мероприятия',
+        'create_booking': 'Создание бронирования',
+        'cancel_booking': 'Отмена бронирования',
+        'process_payment': 'Обработка платежа',
+        'update_profile': 'Обновление профиля',
+        'change_password': 'Смена пароля'
+    };
+    return actions[action] || action;
+}
+
+// Helper function to format log details
+function formatLogDetails(details) {
+    if (!details) return '';
+    
+    try {
+        const data = typeof details === 'string' ? JSON.parse(details) : details;
+        return Object.entries(data)
+            .map(([key, value]) => `${key}: ${value}`)
+            .join(', ');
+    } catch (e) {
+        return String(details);
+    }
 }

@@ -60,6 +60,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         token = credentials.credentials
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         
+        print(f"Token payload: {payload}")
+        
         # Ensure user_id is available (from either user_id or sub field)
         user_id = payload.get("user_id") or int(payload.get("sub", 0))
         if not user_id:
@@ -73,17 +75,21 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "sub": payload.get("sub", str(user_id))
         }
         
+        print(f"Current user: {user}")
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
     except jwt.JWTError as e:
+        print(f"JWT Error: {str(e)}")
         raise HTTPException(status_code=401, detail=f"Could not validate credentials: {str(e)}")
     except ValueError as e:
+        print(f"Value Error: {str(e)}")
         raise HTTPException(status_code=401, detail=f"Invalid token format: {str(e)}")
 
 def check_role(allowed_roles: list):
     """Dependency to check user role"""
     async def role_checker(user: dict = Depends(get_current_user)):
+        print(f"Checking role. User role: {user.get('role')}, Allowed: {allowed_roles}")
         if user["role"] not in allowed_roles:
             raise HTTPException(status_code=403, detail="Operation not permitted")
         return user
@@ -92,7 +98,6 @@ def check_role(allowed_roles: list):
 def verify_csrf():
     """Dependency to verify CSRF token in requests"""
     async def csrf_checker(request: Request, user: dict = Depends(get_current_user)):
-        # Only check CSRF for state-changing operations
         if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
             csrf_token = request.headers.get("X-CSRF-Token")
             
@@ -100,12 +105,10 @@ def verify_csrf():
             if str(request.url.path).endswith('/auth/login') or str(request.url.path).endswith('/auth/register'):
                 return user
             
-            # For development/testing, allow requests without CSRF token
-            # In production, uncomment the following lines:
-            # if not csrf_token:
-            #     raise HTTPException(status_code=403, detail="CSRF token missing")
-            # if not verify_csrf_token(user["user_id"], csrf_token):
-            #     raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            if not csrf_token:
+                raise HTTPException(status_code=403, detail="CSRF token missing")
+            if not verify_csrf_token(user["user_id"], csrf_token):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
         
         return user
     return csrf_checker
