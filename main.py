@@ -1,3 +1,4 @@
+# Updated main.py with improved routers and static pages
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -21,35 +22,57 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Nightclub Booking System starting up...")
-    logger.info(f"API Documentation available at: /docs")
-    logger.info(f"API Base URL: {API_PREFIX}")
+    logger.info("🚀 Nightclub Booking System starting up...")
+    logger.info(f"📚 API Documentation available at: /docs")
+    logger.info(f"🔗 API Base URL: {API_PREFIX}")
+    logger.info(f"🏠 Admin Dashboard: /admin-dashboard.html")
+    logger.info(f"👤 Profile Page: /profile.html")
     yield
     # Shutdown
-    logger.info("Nightclub Booking System shutting down...")
+    logger.info("🛑 Nightclub Booking System shutting down...")
 
 app = FastAPI(
     title="NightClub Booking System",
-    description="Comprehensive API for booking events at the nightclub",
-    version="1.0.0",
+    description="""
+    Comprehensive API for booking events at the nightclub with zone-based pricing.
+    
+    ## Features
+    - 🎫 Event management with zone configuration
+    - 👥 User management with role-based access
+    - 🏛️ Admin panel with audit logs
+    - 💳 Payment processing simulation
+    - 🔐 CSRF protection for state-changing operations
+    
+    ## User Roles
+    - **Admin**: Full access to all features including audit logs
+    - **Moderator**: Can manage users (except admins) and events
+    - **User**: Can book events and manage profile
+    """,
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan
 )
 
-# CORS configuration
+# Enhanced CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, replace with actual frontend domain
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["X-CSRF-Token"]
 )
 
-# Custom middleware to prevent caching in development
+# Custom middleware for development and security headers
 @app.middleware("http")
-async def add_no_cache_headers(request: Request, call_next):
+async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
+    
+    # Add security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
     
     # Add no-cache headers for API endpoints and static files in development
     if request.url.path.startswith("/api/") or request.url.path.startswith("/static/"):
@@ -59,21 +82,39 @@ async def add_no_cache_headers(request: Request, call_next):
     
     # Log API requests for debugging
     if request.url.path.startswith("/api/"):
-        logger.info(f"{request.method} {request.url.path} -> {response.status_code}")
+        logger.info(f"🌐 {request.method} {request.url.path} -> {response.status_code}")
     
     return response
 
-# Health check endpoint
+# Health check endpoint with enhanced information
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for monitoring"""
+    """Enhanced health check endpoint for monitoring"""
+    try:
+        from database import get_db_cursor
+        
+        # Test database connection
+        with get_db_cursor() as cur:
+            cur.execute("SELECT 1")
+            db_status = "healthy"
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        db_status = "unhealthy"
+    
     return {
-        "status": "healthy",
+        "status": "healthy" if db_status == "healthy" else "degraded",
         "service": "nightclub-booking-system",
-        "version": "1.0.0"
+        "version": "2.0.0",
+        "database": db_status,
+        "features": {
+            "zone_pricing": True,
+            "csrf_protection": True,
+            "role_based_access": True,
+            "audit_logs": True
+        }
     }
 
-# Import and include routers BEFORE other route definitions
+# Import and include routers
 try:
     from routers import auth, events, bookings, admin, profile
     
@@ -81,22 +122,22 @@ try:
     app.include_router(auth.router, prefix=f"{API_PREFIX}/auth", tags=["Authentication"])
     app.include_router(events.router, prefix=f"{API_PREFIX}/events", tags=["Events"])
     app.include_router(bookings.router, prefix=f"{API_PREFIX}/bookings", tags=["Bookings"])
-    app.include_router(admin.router, prefix=f"{API_PREFIX}/admin", tags=["Administration"])
+    app.include_router(admin.router, prefix=f"{API_PREFIX}", tags=["Administration"])
     app.include_router(profile.router, prefix=f"{API_PREFIX}/profile", tags=["User Profile"])
     
-    logger.info("All routers loaded successfully")
+    logger.info("✅ All routers loaded successfully")
     
     # Debug: Print all registered routes
     for route in app.routes:
         if hasattr(route, 'path') and hasattr(route, 'methods'):
-            logger.info(f"Route: {route.methods} {route.path}")
+            logger.info(f"📍 Route: {route.methods} {route.path}")
     
 except ImportError as e:
-    logger.error(f"Failed to import routers: {e}")
+    logger.error(f"❌ Failed to import routers: {e}")
     logger.error("Make sure all router files exist and have no syntax errors")
     raise
 except Exception as e:
-    logger.error(f"Error setting up routers: {e}")
+    logger.error(f"❌ Error setting up routers: {e}")
     raise
 
 # CSRF token endpoint
@@ -104,6 +145,7 @@ except Exception as e:
 async def get_csrf_token(current_user: dict = Depends(get_current_user)):
     """Get CSRF token for authenticated users"""
     token = generate_csrf_token(current_user["user_id"])
+    logger.info(f"🔐 CSRF token generated for user {current_user['user_id']}")
     return {"csrf_token": token}
 
 # System info endpoint (for debugging in development)
@@ -111,19 +153,30 @@ async def get_csrf_token(current_user: dict = Depends(get_current_user)):
 async def get_system_info():
     """Get basic system information (development only)"""
     return {
-        "api_version": "1.0.0",
+        "api_version": "2.0.0",
         "api_prefix": API_PREFIX,
+        "features": {
+            "zone_based_pricing": True,
+            "csrf_protection": True,
+            "role_restrictions": True,
+            "audit_logging": True,
+            "static_pages": True
+        },
         "endpoints": {
             "auth": f"{API_PREFIX}/auth",
             "events": f"{API_PREFIX}/events", 
             "bookings": f"{API_PREFIX}/bookings",
             "admin": f"{API_PREFIX}/admin",
             "profile": f"{API_PREFIX}/profile"
-        }
+        },
+        "static_pages": [
+            "/profile.html",
+            "/admin-dashboard.html"
+        ]
     }
 
-# Custom StaticFiles class to add no-cache headers
-class NoCacheStaticFiles(StaticFiles):
+# Custom StaticFiles class with enhanced headers
+class EnhancedStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
         if isinstance(response, FileResponse):
@@ -131,27 +184,44 @@ class NoCacheStaticFiles(StaticFiles):
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
+            
+            # Add content type for specific files
+            if path.endswith('.js'):
+                response.headers["Content-Type"] = "application/javascript"
+            elif path.endswith('.css'):
+                response.headers["Content-Type"] = "text/css"
         return response
 
 # Mount static files
 static_path = "static"
 if os.path.exists(static_path):
-    app.mount("/static", NoCacheStaticFiles(directory=static_path), name="static")
-    logger.info("Static files mounted successfully")
+    app.mount("/static", EnhancedStaticFiles(directory=static_path), name="static")
+    logger.info("📁 Static files mounted successfully")
 else:
-    logger.warning(f"Static directory '{static_path}' not found")
+    logger.warning(f"⚠️ Static directory '{static_path}' not found")
 
 # Exception handlers
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: HTTPException):
-    """Custom 404 handler"""
+    """Custom 404 handler with static page support"""
     # For API routes, return JSON
     if request.url.path.startswith(f"{API_PREFIX}/"):
-        logger.warning(f"API 404: {request.method} {request.url.path}")
+        logger.warning(f"⚠️ API 404: {request.method} {request.url.path}")
         return JSONResponse(
             status_code=404,
             content={"detail": f"API endpoint not found: {request.url.path}"}
         )
+    
+    # For static pages, check if they exist
+    static_pages = {
+        "/profile": "profile.html",
+        "/admin-dashboard": "admin-dashboard.html"
+    }
+    
+    if request.url.path in static_pages:
+        static_file = os.path.join("static", static_pages[request.url.path])
+        if os.path.exists(static_file):
+            return FileResponse(static_file)
     
     # For web routes, serve the SPA
     index_path = os.path.join("static", "index.html")
@@ -166,7 +236,7 @@ async def not_found_handler(request: Request, exc: HTTPException):
 @app.exception_handler(422)
 async def validation_exception_handler(request: Request, exc):
     """Custom 422 handler for validation errors"""
-    logger.error(f"Validation error on {request.url}: {exc}")
+    logger.error(f"❌ Validation error on {request.url}: {exc}")
     return JSONResponse(
         status_code=422,
         content={"detail": exc.errors() if hasattr(exc, 'errors') else "Validation error"}
@@ -175,11 +245,49 @@ async def validation_exception_handler(request: Request, exc):
 @app.exception_handler(500)
 async def internal_error_handler(request: Request, exc: Exception):
     """Custom 500 handler"""
-    logger.error(f"Internal server error on {request.url}: {exc}")
+    logger.error(f"💥 Internal server error on {request.url}: {exc}")
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"}
     )
+
+# Specific routes for static pages
+@app.get("/profile.html")
+async def serve_profile_page():
+    """Serve static profile page"""
+    static_file = os.path.join("static", "profile.html")
+    if os.path.exists(static_file):
+        return FileResponse(static_file)
+    else:
+        raise HTTPException(status_code=404, detail="Profile page not found")
+
+@app.get("/admin-dashboard.html")
+async def serve_admin_dashboard():
+    """Serve static admin dashboard page"""
+    static_file = os.path.join("static", "admin-dashboard.html")
+    if os.path.exists(static_file):
+        return FileResponse(static_file)
+    else:
+        raise HTTPException(status_code=404, detail="Admin dashboard not found")
+
+# Enhanced root endpoint
+@app.get("/")
+async def root():
+    """Root endpoint with system information"""
+    return {
+        "message": "Night Club Booking System API v2.0",
+        "documentation": "/docs",
+        "admin_dashboard": "/admin-dashboard.html",
+        "profile_page": "/profile.html",
+        "health_check": "/health",
+        "features": [
+            "Zone-based event pricing",
+            "CSRF protection",
+            "Role-based access control",
+            "Audit logging",
+            "Static page optimization"
+        ]
+    }
 
 # Handle SPA routes - THIS MUST BE LAST!
 @app.get("/{full_path:path}")
@@ -193,6 +301,13 @@ async def serve_spa(full_path: str):
     if full_path.startswith("static/"):
         raise HTTPException(status_code=404, detail="Static file not found")
     
+    # Check for specific static pages first
+    if full_path == "profile":
+        return await serve_profile_page()
+    elif full_path == "admin-dashboard":
+        return await serve_admin_dashboard()
+    
+    # Serve main SPA
     index_path = os.path.join("static", "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
@@ -201,11 +316,14 @@ async def serve_spa(full_path: str):
 
 if __name__ == "__main__":
     # Development server configuration
+    logger.info("🔧 Starting development server...")
     uvicorn.run(
         "main:app", 
         host="0.0.0.0", 
         port=8000, 
         reload=True,
         reload_dirs=["./"],
-        log_level="info"
+        reload_excludes=["*.log", "*.tmp"],
+        log_level="info",
+        access_log=True
     )

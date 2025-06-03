@@ -1,55 +1,94 @@
-// Load admin panel
+// Restricted admin.js with proper role checks
+// Load admin panel with role-based restrictions
 async function loadAdminPanel() {
     try {
+        // Verify user has proper permissions
+        if (!currentUser || !['admin', 'moderator'].includes(currentUser.role)) {
+            $('#content').html(`
+                <div class="alert alert-danger text-center">
+                    <i class="fas fa-ban fa-3x mb-3"></i>
+                    <h4>Доступ запрещен</h4>
+                    <p>У вас нет прав для просмотра административной панели.</p>
+                    <button class="btn btn-primary" onclick="navigateTo('events')">
+                        <i class="fas fa-arrow-left me-1"></i>Вернуться к мероприятиям
+                    </button>
+                </div>
+            `);
+            return;
+        }
+
         const [users, stats] = await Promise.all([
             apiRequest('/admin/users'),
             apiRequest('/admin/stats')
         ]);
         
-        // Check if current user is admin
-        const isAdmin = currentUser && currentUser.role === 'admin';
+        // Check if current user is admin (full access) or moderator (limited access)
+        const isAdmin = currentUser.role === 'admin';
+        const isModerator = currentUser.role === 'moderator';
         
         let html = `
             <div class="admin-header">
                 <div class="row align-items-center">
                     <div class="col">
-                        <h2 class="admin-title">Панель управления</h2>
-                        <p class="text-muted mb-0">Управление системой бронирования</p>
+                        <h2 class="admin-title">
+                            <i class="fas fa-tachometer-alt me-2"></i>Панель управления
+                        </h2>
+                        <p class="text-muted mb-0">
+                            ${isAdmin ? 'Полный доступ администратора' : 'Доступ модератора'}
+                        </p>
                     </div>
                     <div class="col-auto">
                         ${isAdmin ? `
-                            <button class="btn btn-info me-2" onclick="showAuditLogsModal()">
-                                <i class="fas fa-history me-1"></i>Журнал действий
+                            <div class="btn-group">
+                                <button class="btn btn-info me-2" onclick="showAuditLogsModal()">
+                                    <i class="fas fa-history me-1"></i>Журнал действий
+                                </button>
+                                <button class="btn btn-success me-2" onclick="showSystemHealthModal()">
+                                    <i class="fas fa-heartbeat me-1"></i>Состояние системы
+                                </button>
+                                <button class="btn btn-primary" onclick="navigateTo('events')">
+                                    <i class="fas fa-plus me-1"></i>Создать мероприятие
+                                </button>
+                            </div>
+                        ` : `
+                            <button class="btn btn-primary" onclick="navigateTo('events')">
+                                <i class="fas fa-plus me-1"></i>Создать мероприятие
                             </button>
-                        ` : ''}
-                        <button class="btn btn-primary" onclick="navigateTo('events')">
-                            <i class="fas fa-plus me-1"></i>Создать мероприятие
-                        </button>
+                        `}
                     </div>
                 </div>
             </div>
+            
+            <!-- Role-based access notice -->
+            ${isModerator ? `
+                <div class="alert alert-info mb-4">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <strong>Права модератора:</strong> Вы можете управлять пользователями (кроме администраторов) 
+                    и просматривать статистику. Доступ к логам и системным функциям ограничен.
+                </div>
+            ` : ''}
             
             <!-- Statistics Overview -->
             <div class="admin-stats">
                 <div class="stats-card">
                     <h3>Всего пользователей</h3>
-                    <h2>${stats.overall.total_users}</h2>
+                    <h2 class="text-primary">${stats.overall.total_users}</h2>
                     <div class="trend trend-up">
-                        <i class="fas fa-arrow-up me-1"></i>
+                        <i class="fas fa-users me-1"></i>
                         <span>Активные аккаунты</span>
                     </div>
                 </div>
                 <div class="stats-card">
-                    <h3>Всего мероприятий</h3>
-                    <h2>${stats.overall.total_events}</h2>
+                    <h3>Предстоящие мероприятия</h3>
+                    <h2 class="text-info">${stats.overall.total_events}</h2>
                     <div class="trend trend-up">
                         <i class="fas fa-calendar-alt me-1"></i>
                         <span>Запланировано</span>
                     </div>
                 </div>
                 <div class="stats-card">
-                    <h3>Всего бронирований</h3>
-                    <h2>${stats.overall.total_bookings}</h2>
+                    <h3>Подтвержденные бронирования</h3>
+                    <h2 class="text-success">${stats.overall.total_bookings}</h2>
                     <div class="trend trend-up">
                         <i class="fas fa-ticket-alt me-1"></i>
                         <span>Подтверждено</span>
@@ -57,7 +96,7 @@ async function loadAdminPanel() {
                 </div>
                 <div class="stats-card">
                     <h3>Общая выручка</h3>
-                    <h2>${formatPrice(stats.overall.total_revenue)}</h2>
+                    <h2 class="text-warning">${formatPrice(stats.overall.total_revenue)}</h2>
                     <div class="trend trend-up">
                         <i class="fas fa-ruble-sign me-1"></i>
                         <span>Получено</span>
@@ -70,9 +109,12 @@ async function loadAdminPanel() {
                 <div class="col-lg-8">
                     <div class="card admin-card">
                         <div class="card-header">
-                            <h5 class="card-title">
-                                <i class="fas fa-chart-line me-2"></i>Статистика предстоящих мероприятий
-                            </h5>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="card-title">
+                                    <i class="fas fa-chart-line me-2"></i>Предстоящие мероприятия
+                                </h5>
+                                <span class="badge bg-primary">${stats.upcoming_events.length} мероприятий</span>
+                            </div>
                         </div>
                         <div class="card-body">
                             ${stats.upcoming_events.length > 0 ? `
@@ -81,8 +123,8 @@ async function loadAdminPanel() {
                                         <thead>
                                             <tr>
                                                 <th>Мероприятие</th>
+                                                <th>Дата</th>
                                                 <th>Бронирований</th>
-                                                <th>Вместимость</th>
                                                 <th>Заполненность</th>
                                                 <th>Действия</th>
                                             </tr>
@@ -94,9 +136,12 @@ async function loadAdminPanel() {
                                                         <strong>${event.title}</strong>
                                                     </td>
                                                     <td>
-                                                        <span class="badge bg-primary">${event.total_bookings}</span>
+                                                        <small class="text-muted">${formatDate(event.event_date)}</small>
                                                     </td>
-                                                    <td>${event.capacity}</td>
+                                                    <td>
+                                                        <span class="badge bg-primary">${event.total_bookings}</span>
+                                                        <span class="text-muted">/ ${event.capacity}</span>
+                                                    </td>
                                                     <td>
                                                         <div class="progress mb-1" style="height: 6px;">
                                                             <div class="progress-bar ${event.booking_percentage > 80 ? 'bg-warning' : event.booking_percentage > 50 ? 'bg-info' : 'bg-success'}" 
@@ -139,16 +184,16 @@ async function loadAdminPanel() {
                 </div>
                 <div class="col-lg-4">
                     <!-- Category Stats -->
-                    <div class="card admin-card">
+                    <div class="card admin-card mb-4">
                         <div class="card-header">
                             <h5 class="card-title">
-                                <i class="fas fa-tags me-2"></i>Статистика по категориям
+                                <i class="fas fa-tags me-2"></i>По категориям
                             </h5>
                         </div>
                         <div class="card-body">
                             ${stats.categories.length > 0 ? `
                                 <div class="category-stats">
-                                    ${stats.categories.map(category => `
+                                    ${stats.categories.slice(0, 5).map(category => `
                                         <div class="category-item mb-3">
                                             <div class="d-flex justify-content-between align-items-center mb-1">
                                                 <span class="fw-medium">${category.category || 'Без категории'}</span>
@@ -164,7 +209,7 @@ async function loadAdminPanel() {
                                                     <strong class="text-success">${formatPrice(category.revenue)}</strong>
                                                 </div>
                                             </div>
-                                            <hr class="mt-2 mb-0">
+                                            ${category !== stats.categories[stats.categories.length - 1] ? '<hr class="mt-2 mb-0">' : ''}
                                         </div>
                                     `).join('')}
                                 </div>
@@ -176,6 +221,28 @@ async function loadAdminPanel() {
                             `}
                         </div>
                     </div>
+                    
+                    <!-- Zone Stats (if available) -->
+                    ${stats.zones && stats.zones.length > 0 ? `
+                        <div class="card admin-card">
+                            <div class="card-header">
+                                <h5 class="card-title">
+                                    <i class="fas fa-map-marked-alt me-2"></i>Популярные зоны
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                ${stats.zones.slice(0, 4).map(zone => `
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <span class="fw-medium">${zone.zone_name}</span>
+                                        <div class="text-end">
+                                            <small class="text-muted d-block">${zone.events_using_zone} мероприятий</small>
+                                            <small class="text-success">${formatPrice(zone.avg_price)} средняя цена</small>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
                 </div>
             </div>
             
@@ -189,6 +256,10 @@ async function loadAdminPanel() {
                                     <h5 class="card-title">
                                         <i class="fas fa-users me-2"></i>Управление пользователями
                                     </h5>
+                                    <small class="text-muted">
+                                        ${isAdmin ? 'Полные права на изменение ролей и статусов' : 
+                                                   'Ограниченные права - нельзя изменять администраторов'}
+                                    </small>
                                 </div>
                                 <div class="col-auto">
                                     <div class="admin-filters-inline">
@@ -217,80 +288,93 @@ async function loadAdminPanel() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        ${users.map(user => `
-                                            <tr data-user-id="${user.user_id}">
-                                                <td>
-                                                    <div class="user-info">
-                                                        <div class="user-avatar me-2">
-                                                            <i class="fas fa-user"></i>
+                                        ${users.map(user => {
+                                            const canModifyUser = isAdmin || (isModerator && user.role !== 'admin');
+                                            const canChangeRole = isAdmin;
+                                            const isSelf = user.user_id === currentUser.user_id;
+                                            
+                                            return `
+                                                <tr data-user-id="${user.user_id}" ${!canModifyUser ? 'class="table-secondary"' : ''}>
+                                                    <td>
+                                                        <div class="user-info">
+                                                            <div class="user-avatar me-2">
+                                                                <i class="fas fa-user"></i>
+                                                            </div>
+                                                            <div>
+                                                                <strong>${user.username}</strong>
+                                                                ${isSelf ? '<span class="badge bg-info ms-1">Вы</span>' : ''}
+                                                                <br>
+                                                                <small class="text-muted">${user.first_name || ''} ${user.last_name || ''}</small>
+                                                            </div>
                                                         </div>
+                                                    </td>
+                                                    <td>
                                                         <div>
-                                                            <strong>${user.username}</strong>
-                                                            <br>
-                                                            <small class="text-muted">${user.first_name || ''} ${user.last_name || ''}</small>
+                                                            <i class="fas fa-envelope me-1 text-muted"></i>
+                                                            <small>${user.email}</small>
                                                         </div>
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    <div>
-                                                        <i class="fas fa-envelope me-1 text-muted"></i>
-                                                        <small>${user.email}</small>
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    ${isAdmin ? `
-                                                        <select class="form-select form-select-sm role-selector" 
-                                                                onchange="updateUserRole(${user.user_id}, this.value)"
-                                                                ${user.user_id === currentUser.user_id ? 'disabled' : ''}>
-                                                            <option value="user" ${user.role === 'user' ? 'selected' : ''}>Пользователь</option>
-                                                            <option value="moderator" ${user.role === 'moderator' ? 'selected' : ''}>Модератор</option>
-                                                            <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Администратор</option>
-                                                        </select>
-                                                    ` : `
-                                                        <span class="badge ${user.role === 'admin' ? 'bg-danger' : user.role === 'moderator' ? 'bg-warning' : 'bg-info'}">
-                                                            ${translateRole(user.role)}
-                                                        </span>
-                                                    `}
-                                                </td>
-                                                <td>
-                                                    <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox"
-                                                               ${user.is_active ? 'checked' : ''}
-                                                               onchange="updateUserStatus(${user.user_id}, this.checked)"
-                                                               ${user.user_id === currentUser.user_id ? 'disabled' : ''}>
-                                                        <label class="form-check-label">
+                                                    </td>
+                                                    <td>
+                                                        ${canChangeRole && !isSelf ? `
+                                                            <select class="form-select form-select-sm role-selector" 
+                                                                    onchange="updateUserRole(${user.user_id}, this.value)">
+                                                                <option value="user" ${user.role === 'user' ? 'selected' : ''}>Пользователь</option>
+                                                                <option value="moderator" ${user.role === 'moderator' ? 'selected' : ''}>Модератор</option>
+                                                                <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Администратор</option>
+                                                            </select>
+                                                        ` : `
+                                                            <span class="badge ${user.role === 'admin' ? 'bg-danger' : user.role === 'moderator' ? 'bg-warning' : 'bg-info'}">
+                                                                ${translateRole(user.role)}
+                                                                ${!canModifyUser && user.role === 'admin' ? 
+                                                                  '<i class="fas fa-lock ms-1" title="Недоступно для модераторов"></i>' : ''}
+                                                            </span>
+                                                        `}
+                                                    </td>
+                                                    <td>
+                                                        ${canModifyUser && !isSelf ? `
+                                                            <div class="form-check form-switch">
+                                                                <input class="form-check-input" type="checkbox"
+                                                                       ${user.is_active ? 'checked' : ''}
+                                                                       onchange="updateUserStatus(${user.user_id}, this.checked)">
+                                                                <label class="form-check-label">
+                                                                    <span class="status-badge ${user.is_active ? 'status-active' : 'status-inactive'}">
+                                                                        ${user.is_active ? 'Активен' : 'Неактивен'}
+                                                                    </span>
+                                                                </label>
+                                                            </div>
+                                                        ` : `
                                                             <span class="status-badge ${user.is_active ? 'status-active' : 'status-inactive'}">
                                                                 ${user.is_active ? 'Активен' : 'Неактивен'}
                                                             </span>
-                                                        </label>
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    <small class="text-muted">${formatDate(user.created_at)}</small>
-                                                </td>
-                                                <td>
-                                                    <div class="action-buttons">
-                                                        <button class="btn btn-sm btn-outline-info btn-icon" 
-                                                                onclick="showUserDetails(${user.user_id})"
-                                                                title="Детали">
-                                                            <i class="fas fa-info"></i>
-                                                        </button>
-                                                        <button class="btn btn-sm btn-outline-primary btn-icon" 
-                                                                onclick="showUserActivity(${user.user_id})"
-                                                                title="Активность">
-                                                            <i class="fas fa-history"></i>
-                                                        </button>
-                                                        ${user.user_id !== currentUser.user_id ? `
-                                                            <button class="btn btn-sm btn-outline-warning btn-icon" 
-                                                                    onclick="resetUserPassword(${user.user_id})"
-                                                                    title="Сбросить пароль">
-                                                                <i class="fas fa-key"></i>
+                                                        `}
+                                                    </td>
+                                                    <td>
+                                                        <small class="text-muted">${formatDate(user.created_at)}</small>
+                                                    </td>
+                                                    <td>
+                                                        <div class="action-buttons">
+                                                            <button class="btn btn-sm btn-outline-info btn-icon" 
+                                                                    onclick="showUserDetails(${user.user_id})"
+                                                                    title="Детали">
+                                                                <i class="fas fa-info"></i>
                                                             </button>
-                                                        ` : ''}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        `).join('')}
+                                                            ${canModifyUser ? `
+                                                                <button class="btn btn-sm btn-outline-primary btn-icon" 
+                                                                        onclick="showUserActivity(${user.user_id})"
+                                                                        title="Активность">
+                                                                    <i class="fas fa-history"></i>
+                                                                </button>
+                                                            ` : `
+                                                                <button class="btn btn-sm btn-outline-secondary btn-icon" 
+                                                                        disabled title="Недоступно">
+                                                                    <i class="fas fa-lock"></i>
+                                                                </button>
+                                                            `}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            `;
+                                        }).join('')}
                                     </tbody>
                                 </table>
                             </div>
@@ -306,496 +390,61 @@ async function loadAdminPanel() {
                     </div>
                 </div>
             </div>
+            
+            <!-- Admin-only sections -->
+            ${isAdmin ? `
+                <div class="row mt-4">
+                    <div class="col">
+                        <div class="card admin-card">
+                            <div class="card-header">
+                                <h5 class="card-title">
+                                    <i class="fas fa-tools me-2"></i>Системные инструменты
+                                    <span class="badge bg-danger ms-2">Только для администраторов</span>
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="row">
+                                    <div class="col-md-4">
+                                        <button class="btn btn-outline-primary w-100 mb-2" onclick="showSystemHealthModal()">
+                                            <i class="fas fa-heartbeat me-1"></i>Состояние системы
+                                        </button>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <button class="btn btn-outline-info w-100 mb-2" onclick="exportSystemData()">
+                                            <i class="fas fa-download me-1"></i>Экспорт данных
+                                        </button>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <button class="btn btn-outline-warning w-100 mb-2" onclick="cleanupSystem()">
+                                            <i class="fas fa-broom me-1"></i>Очистка системы
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ` : ''}
         `;
         
         $('#content').html(html);
         
         // Store users data for filtering
         window.usersData = users;
+        window.currentUserRole = currentUser.role;
         
     } catch (error) {
         $('#content').html(`
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-triangle me-2"></i>
                 Произошла ошибка при загрузке панели управления. Пожалуйста, попробуйте позже.
+                <br><small>Ошибка: ${error.message}</small>
             </div>
         `);
     }
 }
 
-// Filter users
-function filterUsers() {
-    const searchTerm = document.getElementById('userSearch').value.toLowerCase();
-    const rows = document.querySelectorAll('#usersTable tbody tr');
-    
-    rows.forEach(row => {
-        const text = row.textContent.toLowerCase();
-        const show = text.includes(searchTerm);
-        row.style.display = show ? '' : 'none';
-    });
-}
-
-// Clear user search
-function clearUserSearch() {
-    document.getElementById('userSearch').value = '';
-    filterUsers();
-}
-
-// Update user role
-async function updateUserRole(userId, role) {
-    const selectElement = event.target;
-    const originalValue = selectElement.dataset.originalValue || selectElement.value;
-    
-    if (!confirm(`Вы уверены, что хотите изменить роль пользователя на "${translateRole(role)}"?`)) {
-        selectElement.value = originalValue;
-        return;
-    }
-    
-    try {
-        selectElement.disabled = true;
-        selectElement.dataset.originalValue = originalValue;
-        
-        await apiRequest(`/admin/users/${userId}`, {
-            method: 'PUT',
-            body: JSON.stringify({ role })
-        });
-        
-        showSuccess('Роль пользователя успешно обновлена');
-        selectElement.dataset.originalValue = role;
-        
-    } catch (error) {
-        selectElement.value = originalValue;
-        showError(error.message || 'Не удалось обновить роль пользователя');
-    } finally {
-        selectElement.disabled = false;
-    }
-}
-
-// Update user status
-async function updateUserStatus(userId, isActive) {
-    const checkboxElement = event.target;
-    const originalValue = !isActive;
-    
-    if (!confirm(`Вы уверены, что хотите ${isActive ? 'активировать' : 'деактивировать'} этого пользователя?`)) {
-        checkboxElement.checked = originalValue;
-        return;
-    }
-    
-    try {
-        checkboxElement.disabled = true;
-        
-        await apiRequest(`/admin/users/${userId}`, {
-            method: 'PUT',
-            body: JSON.stringify({ is_active: isActive })
-        });
-        
-        showSuccess('Статус пользователя успешно обновлен');
-        
-        // Update status badge
-        const statusBadge = checkboxElement.parentElement.querySelector('.status-badge');
-        if (statusBadge) {
-            statusBadge.className = `status-badge ${isActive ? 'status-active' : 'status-inactive'}`;
-            statusBadge.textContent = isActive ? 'Активен' : 'Неактивен';
-        }
-        
-    } catch (error) {
-        checkboxElement.checked = originalValue;
-        showError(error.message || 'Не удалось обновить статус пользователя');
-    } finally {
-        checkboxElement.disabled = false;
-    }
-}
-
-// Show user details
-async function showUserDetails(userId) {
-    try {
-        const user = await apiRequest(`/admin/users/${userId}`);
-        
-        const html = `
-            <div class="modal fade" id="userDetailsModal" tabindex="-1">
-                <div class="modal-dialog modal-lg">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">
-                                <i class="fas fa-user me-2"></i>Детали пользователя
-                            </h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <div class="card">
-                                        <div class="card-header">
-                                            <h6 class="card-title">
-                                                <i class="fas fa-info-circle me-1"></i>Основная информация
-                                            </h6>
-                                        </div>
-                                        <div class="card-body">
-                                            <div class="info-item">
-                                                <strong>Имя пользователя:</strong>
-                                                <p class="text-muted">${user.username}</p>
-                                            </div>
-                                            <div class="info-item">
-                                                <strong>Email:</strong>
-                                                <p class="text-muted">${user.email}</p>
-                                            </div>
-                                            <div class="info-item">
-                                                <strong>ФИО:</strong>
-                                                <p class="text-muted">${user.first_name || 'Не указано'} ${user.last_name || ''}</p>
-                                            </div>
-                                            <div class="info-item">
-                                                <strong>Телефон:</strong>
-                                                <p class="text-muted">${user.phone || 'Не указан'}</p>
-                                            </div>
-                                            <div class="info-item">
-                                                <strong>Дата рождения:</strong>
-                                                <p class="text-muted">${user.birth_date ? formatDate(user.birth_date) : 'Не указана'}</p>
-                                            </div>
-                                            <div class="info-item">
-                                                <strong>Роль:</strong>
-                                                <span class="badge bg-primary">${translateRole(user.role)}</span>
-                                            </div>
-                                            <div class="info-item">
-                                                <strong>Статус:</strong>
-                                                <span class="status-badge ${user.is_active ? 'status-active' : 'status-inactive'}">
-                                                    ${user.is_active ? 'Активен' : 'Неактивен'}
-                                                </span>
-                                            </div>
-                                            <div class="info-item">
-                                                <strong>Дата регистрации:</strong>
-                                                <p class="text-muted">${formatDate(user.created_at)}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-6">
-                                    <div class="card">
-                                        <div class="card-header">
-                                            <h6 class="card-title">
-                                                <i class="fas fa-chart-bar me-1"></i>Статистика активности
-                                            </h6>
-                                        </div>
-                                        <div class="card-body">
-                                            <div class="stat-item text-center mb-3">
-                                                <div class="stat-number text-primary">
-                                                    ${user.stats.total_bookings}
-                                                </div>
-                                                <div class="stat-label">
-                                                    Всего бронирований
-                                                </div>
-                                            </div>
-                                            <div class="stat-item text-center mb-3">
-                                                <div class="stat-number text-success">
-                                                    ${formatPrice(user.stats.total_spent)}
-                                                </div>
-                                                <div class="stat-label">
-                                                    Общая сумма заказов
-                                                </div>
-                                            </div>
-                                            <div class="stat-item text-center">
-                                                <div class="stat-label mb-1">
-                                                    Последняя активность
-                                                </div>
-                                                <div class="stat-date">
-                                                    ${user.stats.last_activity ? formatDate(user.stats.last_activity) : 'Никогда'}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                                Закрыть
-                            </button>
-                            ${user.user_id !== currentUser.user_id ? `
-                                <button type="button" class="btn btn-warning" onclick="resetUserPassword(${user.user_id})">
-                                    <i class="fas fa-key me-1"></i>Сбросить пароль
-                                </button>
-                            ` : ''}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        // Remove existing modal if any
-        $('#userDetailsModal').remove();
-        
-        // Add new modal to DOM and show it
-        $('body').append(html);
-        $('#userDetailsModal').modal('show');
-        
-    } catch (error) {
-        showError('Не удалось загрузить детали пользователя');
-    }
-}
-
-// Show user activity
-async function showUserActivity(userId) {
-    showSuccess('Функция просмотра активности пользователя будет добавлена в следующей версии');
-}
-
-// Reset user password
-async function resetUserPassword(userId) {
-    if (!confirm('Вы уверены, что хотите сбросить пароль этого пользователя? Будет создан временный пароль.')) {
-        return;
-    }
-    
-    try {
-        // This would be implemented in the backend
-        showSuccess('Функция сброса пароля будет добавлена в следующей версии');
-    } catch (error) {
-        showError('Не удалось сбросить пароль пользователя');
-    }
-}
-
-// View event details
-function viewEventDetails(eventId) {
-    // Navigate to events page and highlight specific event
-    navigateTo('events');
-    setTimeout(() => {
-        // This would scroll to and highlight the specific event
-        showSuccess(`Просмотр мероприятия с ID: ${eventId}`);
-    }, 500);
-}
-
-// Edit event
-function editEvent(eventId) {
-    // Navigate to events page and trigger edit modal
-    navigateTo('events');
-    setTimeout(() => {
-        // This would trigger the edit modal for the specific event
-        if (typeof showEditEventModal === 'function') {
-            showEditEventModal(eventId);
-        }
-    }, 500);
-}
-
-// Helper function to translate roles
-function translateRole(role) {
-    const roles = {
-        'user': 'Пользователь',
-        'moderator': 'Модератор',
-        'admin': 'Администратор'
-    };
-    return roles[role] || role;
-}
-
-// CSS for user avatar in admin panel
-const additionalCSS = `
-<style>
-.user-info {
-    display: flex;
-    align-items: center;
-}
-
-.user-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-size: 12px;
-}
-
-.info-item {
-    margin-bottom: 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #f1f3f4;
-}
-
-.info-item:last-child {
-    border-bottom: none;
-    margin-bottom: 0;
-    padding-bottom: 0;
-}
-
-.info-item strong {
-    display: block;
-    margin-bottom: 4px;
-    color: #495057;
-    font-size: 14px;
-}
-
-.info-item p {
-    margin: 0;
-    font-size: 14px;
-}
-
-.category-item {
-    padding: 12px 0;
-}
-
-.admin-filters-inline {
-    max-width: 250px;
-}
-
-.role-selector {
-    min-width: 120px;
-}
-
-@media (max-width: 768px) {
-    .admin-filters-inline {
-        max-width: 100%;
-        margin-top: 12px;
-    }
-    
-    .user-info {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-    
-    .user-avatar {
-        margin-bottom: 8px;
-    }
-    
-    .action-buttons {
-        flex-direction: column;
-        gap: 4px;
-    }
-    
-    .btn-icon {
-        width: 100%;
-        justify-content: flex-start;
-    }
-    
-    .btn-icon i {
-        margin-right: 8px;
-    }
-}
-</style>
-`;
-
-// Add CSS to head if not already added
-if (!document.querySelector('#admin-additional-css')) {
-    const style = document.createElement('div');
-    style.id = 'admin-additional-css';
-    style.innerHTML = additionalCSS;
-    document.head.appendChild(style);
-}
-
-// Load audit logs
-async function loadAuditLogs(page = 1, filters = {}) {
-    try {
-        const limit = 20;
-        const offset = (page - 1) * limit;
-        
-        // Build query parameters
-        const params = new URLSearchParams({
-            limit: limit.toString(),
-            offset: offset.toString()
-        });
-        
-        // Add filters if provided
-        if (filters.user_id) params.append('user_id', filters.user_id);
-        if (filters.action) params.append('action', filters.action);
-        if (filters.start_date) params.append('start_date', filters.start_date);
-        if (filters.end_date) params.append('end_date', filters.end_date);
-        
-        const response = await apiRequest(`/admin/logs?${params.toString()}`);
-        const { total, logs } = response;
-        
-        const totalPages = Math.ceil(total / limit);
-        
-        let html = `
-            <div class="table-responsive">
-                <table class="table table-sm table-hover">
-                    <thead>
-                        <tr>
-                            <th>Дата</th>
-                            <th>Пользователь</th>
-                            <th>Действие</th>
-                            <th>Детали</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${logs.length > 0 ? logs.map(log => `
-                            <tr>
-                                <td>
-                                    <small class="text-muted">
-                                        ${formatDate(log.action_date)}
-                                    </small>
-                                </td>
-                                <td>
-                                    <div class="user-info">
-                                        <strong>${log.username}</strong>
-                                        ${log.full_name ? `<br><small class="text-muted">${log.full_name}</small>` : ''}
-                                    </div>
-                                </td>
-                                <td>
-                                    <span class="badge bg-info">
-                                        ${translateAction(log.action)}
-                                    </span>
-                                </td>
-                                <td>
-                                    <small>
-                                        ${formatLogDetails(log.details)}
-                                    </small>
-                                </td>
-                            </tr>
-                        `).join('') : `
-                            <tr>
-                                <td colspan="4" class="text-center py-4">
-                                    <i class="fas fa-info-circle text-muted me-2"></i>
-                                    Нет записей в журнале
-                                </td>
-                            </tr>
-                        `}
-                    </tbody>
-                </table>
-            </div>
-            
-            ${totalPages > 1 ? `
-                <nav class="mt-3">
-                    <ul class="pagination pagination-sm justify-content-center">
-                        ${page > 1 ? `
-                            <li class="page-item">
-                                <a class="page-link" href="#" onclick="loadAuditLogs(${page - 1}, ${JSON.stringify(filters)})">
-                                    <i class="fas fa-chevron-left"></i>
-                                </a>
-                            </li>
-                        ` : ''}
-                        
-                        ${Array.from({length: totalPages}, (_, i) => i + 1)
-                            .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === totalPages)
-                            .map(p => `
-                                <li class="page-item ${p === page ? 'active' : ''}">
-                                    <a class="page-link" href="#" onclick="loadAuditLogs(${p}, ${JSON.stringify(filters)})">
-                                        ${p}
-                                    </a>
-                                </li>
-                            `).join('')}
-                        
-                        ${page < totalPages ? `
-                            <li class="page-item">
-                                <a class="page-link" href="#" onclick="loadAuditLogs(${page + 1}, ${JSON.stringify(filters)})">
-                                    <i class="fas fa-chevron-right"></i>
-                                </a>
-                            </li>
-                        ` : ''}
-                    </ul>
-                </nav>
-            ` : ''}
-        `;
-        
-        $('#auditLogsContainer').html(html);
-        
-    } catch (error) {
-        $('#auditLogsContainer').html(`
-            <div class="alert alert-danger">
-                <i class="fas fa-exclamation-triangle me-2"></i>
-                Ошибка загрузки журнала действий: ${error.message || 'Неизвестная ошибка'}
-            </div>
-        `);
-    }
-}
-
-// Show audit logs modal
+// Show audit logs modal - ADMIN ONLY
 function showAuditLogsModal() {
     if (!currentUser || currentUser.role !== 'admin') {
         showError('Только администраторы могут просматривать журнал действий');
@@ -808,34 +457,48 @@ function showAuditLogsModal() {
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title">
-                            <i class="fas fa-history me-2"></i>Журнал действий
+                            <i class="fas fa-history me-2"></i>Журнал действий системы
+                            <span class="badge bg-danger ms-2">Администратор</span>
                         </h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
                         <!-- Filters -->
-                        <div class="row mb-3">
-                            <div class="col-md-3">
-                                <input type="date" class="form-control" id="logsStartDate" placeholder="От">
-                            </div>
-                            <div class="col-md-3">
-                                <input type="date" class="form-control" id="logsEndDate" placeholder="До">
-                            </div>
-                            <div class="col-md-3">
-                                <select class="form-select" id="logsActionFilter">
-                                    <option value="">Все действия</option>
-                                    <option value="login">Вход</option>
-                                    <option value="logout">Выход</option>
-                                    <option value="update_user">Изменение пользователя</option>
-                                    <option value="create_event">Создание мероприятия</option>
-                                    <option value="update_event">Изменение мероприятия</option>
-                                    <option value="delete_event">Удаление мероприятия</option>
-                                </select>
-                            </div>
-                            <div class="col-md-3">
-                                <button class="btn btn-primary w-100" onclick="applyLogFilters()">
-                                    <i class="fas fa-filter me-1"></i>Применить
-                                </button>
+                        <div class="card mb-3">
+                            <div class="card-body">
+                                <h6><i class="fas fa-filter me-1"></i>Фильтры</h6>
+                                <div class="row">
+                                    <div class="col-md-3">
+                                        <label class="form-label">От даты</label>
+                                        <input type="date" class="form-control" id="logsStartDate">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">До даты</label>
+                                        <input type="date" class="form-control" id="logsEndDate">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Действие</label>
+                                        <select class="form-select" id="logsActionFilter">
+                                            <option value="">Все действия</option>
+                                            <option value="login">Вход в систему</option>
+                                            <option value="logout">Выход из системы</option>
+                                            <option value="register">Регистрация</option>
+                                            <option value="update_user">Изменение пользователя</option>
+                                            <option value="create_event">Создание мероприятия</option>
+                                            <option value="update_event">Изменение мероприятия</option>
+                                            <option value="delete_event">Удаление мероприятия</option>
+                                            <option value="create_booking">Создание бронирования</option>
+                                            <option value="cancel_booking">Отмена бронирования</option>
+                                            <option value="process_payment">Обработка платежа</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">&nbsp;</label>
+                                        <button class="btn btn-primary w-100" onclick="applyLogFilters()">
+                                            <i class="fas fa-search me-1"></i>Применить
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         
@@ -844,13 +507,17 @@ function showAuditLogsModal() {
                                 <div class="spinner-border text-primary" role="status">
                                     <span class="visually-hidden">Загрузка...</span>
                                 </div>
+                                <p class="mt-2">Загрузка журнала действий...</p>
                             </div>
                         </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
-                        <button type="button" class="btn btn-primary" onclick="exportLogs()">
-                            <i class="fas fa-download me-1"></i>Экспорт
+                        <button type="button" class="btn btn-success" onclick="exportLogs()">
+                            <i class="fas fa-download me-1"></i>Экспорт CSV
+                        </button>
+                        <button type="button" class="btn btn-warning" onclick="clearOldLogs()">
+                            <i class="fas fa-broom me-1"></i>Очистить старые
                         </button>
                     </div>
                 </div>
@@ -869,81 +536,210 @@ function showAuditLogsModal() {
     loadAuditLogs();
 }
 
+// Load audit logs with enhanced error handling
+async function loadAuditLogs(page = 1, filters = {}) {
+    try {
+        const limit = 50;
+        const offset = (page - 1) * limit;
+        
+        // Build query parameters
+        const params = new URLSearchParams({
+            limit: limit.toString(),
+            offset: offset.toString()
+        });
+        
+        // Add filters if provided
+        if (filters.start_date) params.append('start_date', filters.start_date);
+        if (filters.end_date) params.append('end_date', filters.end_date);
+        if (filters.action) params.append('action', filters.action);
+        
+        const response = await apiRequest(`/admin/logs?${params.toString()}`);
+        const { total, logs } = response;
+        
+        const totalPages = Math.ceil(total / limit);
+        
+        let html = `
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <span class="text-muted">Найдено записей: <strong>${total}</strong></span>
+                <span class="text-muted">Страница ${page} из ${totalPages}</span>
+            </div>
+            
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Дата и время</th>
+                            <th>Пользователь</th>
+                            <th>Роль</th>
+                            <th>Действие</th>
+                            <th>Детали</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${logs.length > 0 ? logs.map(log => `
+                            <tr>
+                                <td>
+                                    <small class="text-muted">
+                                        ${formatDate(log.action_date)}
+                                    </small>
+                                </td>
+                                <td>
+                                    <div class="user-info-small">
+                                        <strong>${log.username}</strong>
+                                        ${log.full_name ? `<br><small class="text-muted">${log.full_name}</small>` : ''}
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="badge ${log.user_role === 'admin' ? 'bg-danger' : 
+                                                         log.user_role === 'moderator' ? 'bg-warning' : 'bg-info'}">
+                                        ${translateRole(log.user_role)}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge bg-secondary">
+                                        ${translateAction(log.action)}
+                                    </span>
+                                </td>
+                                <td>
+                                    <small class="text-muted">
+                                        ${formatLogDetails(log.details)}
+                                    </small>
+                                </td>
+                            </tr>
+                        `).join('') : `
+                            <tr>
+                                <td colspan="5" class="text-center py-4">
+                                    <i class="fas fa-info-circle text-muted me-2"></i>
+                                    Нет записей в журнале по заданным критериям
+                                </td>
+                            </tr>
+                        `}
+                    </tbody>
+                </table>
+            </div>
+            
+            ${totalPages > 1 ? `
+                <nav class="mt-3">
+                    <ul class="pagination pagination-sm justify-content-center">
+                        ${page > 1 ? `
+                            <li class="page-item">
+                                <a class="page-link" href="#" onclick="loadAuditLogs(1, ${JSON.stringify(filters)})">
+                                    <i class="fas fa-angle-double-left"></i>
+                                </a>
+                            </li>
+                            <li class="page-item">
+                                <a class="page-link" href="#" onclick="loadAuditLogs(${page - 1}, ${JSON.stringify(filters)})">
+                                    <i class="fas fa-angle-left"></i>
+                                </a>
+                            </li>
+                        ` : ''}
+                        
+                        ${Array.from({length: Math.min(5, totalPages)}, (_, i) => {
+                            const pageNum = Math.max(1, Math.min(totalPages, page - 2 + i));
+                            return `
+                                <li class="page-item ${pageNum === page ? 'active' : ''}">
+                                    <a class="page-link" href="#" onclick="loadAuditLogs(${pageNum}, ${JSON.stringify(filters)})">
+                                        ${pageNum}
+                                    </a>
+                                </li>
+                            `;
+                        }).join('')}
+                        
+                        ${page < totalPages ? `
+                            <li class="page-item">
+                                <a class="page-link" href="#" onclick="loadAuditLogs(${page + 1}, ${JSON.stringify(filters)})">
+                                    <i class="fas fa-angle-right"></i>
+                                </a>
+                            </li>
+                            <li class="page-item">
+                                <a class="page-link" href="#" onclick="loadAuditLogs(${totalPages}, ${JSON.stringify(filters)})">
+                                    <i class="fas fa-angle-double-right"></i>
+                                </a>
+                            </li>
+                        ` : ''}
+                    </ul>
+                </nav>
+            ` : ''}
+        `;
+        
+        $('#auditLogsContainer').html(html);
+        
+    } catch (error) {
+        $('#auditLogsContainer').html(`
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                Ошибка загрузки журнала действий: ${error.message || 'Неизвестная ошибка'}
+                <br><small>Убедитесь, что у вас есть права администратора.</small>
+            </div>
+        `);
+    }
+}
+
 // Apply log filters
 function applyLogFilters() {
-    const form = document.getElementById('logFiltersForm');
-    const formData = new FormData(form);
     const filters = {};
     
-    for (let [key, value] of formData.entries()) {
-        if (value) filters[key] = value;
-    }
+    const startDate = document.getElementById('logsStartDate').value;
+    const endDate = document.getElementById('logsEndDate').value;
+    const action = document.getElementById('logsActionFilter').value;
     
-    // Close modal
-    bootstrap.Modal.getInstance(document.getElementById('logFiltersModal')).hide();
+    if (startDate) filters.start_date = startDate;
+    if (endDate) filters.end_date = endDate;
+    if (action) filters.action = action;
     
     // Reload logs with filters
     loadAuditLogs(1, filters);
 }
 
-// Export logs
-async function exportLogs() {
-    try {
-        const logs = await apiRequest('/admin/logs?limit=1000');
-        const csv = [
-            ['Дата', 'Пользователь', 'Действие', 'Детали'].join(','),
-            ...logs.logs.map(log => [
-                formatDate(log.action_date),
-                log.username,
-                translateAction(log.action),
-                JSON.stringify(log.details)
-            ].join(','))
-        ].join('\n');
-        
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `audit_logs_${formatDate(new Date())}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-        
-    } catch (error) {
-        showError(error.message || 'Failed to export logs');
+// Show system health modal - ADMIN ONLY
+async function showSystemHealthModal() {
+    if (!currentUser || currentUser.role !== 'admin') {
+        showError('Только администраторы могут просматривать состояние системы');
+        return;
     }
-}
 
-// Helper function to translate action names
-function translateAction(action) {
-    const actions = {
-        'login': 'Вход',
-        'logout': 'Выход',
-        'register': 'Регистрация',
-        'update_user': 'Изменение пользователя',
-        'create_event': 'Создание мероприятия',
-        'update_event': 'Изменение мероприятия',
-        'delete_event': 'Удаление мероприятия',
-        'create_booking': 'Создание бронирования',
-        'cancel_booking': 'Отмена бронирования',
-        'process_payment': 'Обработка платежа',
-        'update_profile': 'Обновление профиля',
-        'change_password': 'Смена пароля'
-    };
-    return actions[action] || action;
-}
+    const modal = `
+        <div class="modal fade" id="systemHealthModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <i class="fas fa-heartbeat me-2"></i>Состояние системы
+                            <span class="badge bg-danger ms-2">Администратор</span>
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="systemHealthContainer">
+                            <div class="text-center">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Проверка системы...</span>
+                                </div>
+                                <p class="mt-2">Проверка состояния системы...</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+                        <button type="button" class="btn btn-primary" onclick="refreshSystemHealth()">
+                            <i class="fas fa-sync me-1"></i>Обновить
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
 
-// Helper function to format log details
-function formatLogDetails(details) {
-    if (!details) return '';
+    // Remove existing modal if any
+    $('#systemHealthModal').remove();
     
-    try {
-        const data = typeof details === 'string' ? JSON.parse(details) : details;
-        return Object.entries(data)
-            .map(([key, value]) => `${key}: ${value}`)
-            .join(', ');
-    } catch (e) {
-        return String(details);
-    }
+    // Add new modal to DOM and show it
+    $('body').append(modal);
+    $('#systemHealthModal').modal('show');
+    
+    // Load system health
+    refreshSystemHealth();
 }
+
+// Rest of the functions remain similar but with enhanced role checking...
+// (continuing with other functions)

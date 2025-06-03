@@ -1,26 +1,39 @@
+// Improved main.js with better CSRF handling
 // API configuration
 const API_URL = '/api/v1';
 let currentUser = null;
 let csrfToken = null;
+let csrfTokenExpiry = null;
 
 // Add cache busting for development
 const CACHE_VERSION = Date.now();
 
-// Router configuration - will be initialized after DOM ready
+// Router configuration
 let routes = {};
 
 // Utility functions
 function showLoading() {
-    $('#content').html('<div class="loading"></div>');
+    $('#content').html(`
+        <div class="d-flex justify-content-center align-items-center" style="min-height: 300px;">
+            <div class="text-center">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Загрузка...</span>
+                </div>
+                <p class="mt-3 text-muted">Загрузка...</p>
+            </div>
+        </div>
+    `);
 }
 
 function showError(message) {
     console.error('Error:', message);
     const toast = `
-        <div class="toast-container">
+        <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 9999;">
             <div class="toast show" role="alert">
                 <div class="toast-header bg-danger text-white">
-                    <strong class="me-auto">Ошибка</strong>
+                    <strong class="me-auto">
+                        <i class="fas fa-exclamation-triangle me-1"></i>Ошибка
+                    </strong>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
                 </div>
                 <div class="toast-body">${message}</div>
@@ -28,18 +41,24 @@ function showError(message) {
         </div>
     `;
     
-    $('.toast-container').remove();
+    // Remove existing error toasts
+    $('.toast-container').filter(':has(.bg-danger)').remove();
     $('body').append(toast);
-    setTimeout(() => $('.toast-container').remove(), 5000);
+    
+    setTimeout(() => {
+        $('.toast-container').filter(':has(.bg-danger)').remove();
+    }, 5000);
 }
 
 function showSuccess(message) {
     console.log('Success:', message);
     const toast = `
-        <div class="toast-container">
+        <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 9999;">
             <div class="toast show" role="alert">
                 <div class="toast-header bg-success text-white">
-                    <strong class="me-auto">Успех</strong>
+                    <strong class="me-auto">
+                        <i class="fas fa-check-circle me-1"></i>Успех
+                    </strong>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
                 </div>
                 <div class="toast-body">${message}</div>
@@ -47,9 +66,13 @@ function showSuccess(message) {
         </div>
     `;
     
-    $('.toast-container').remove();
+    // Remove existing success toasts
+    $('.toast-container').filter(':has(.bg-success)').remove();
     $('body').append(toast);
-    setTimeout(() => $('.toast-container').remove(), 3000);
+    
+    setTimeout(() => {
+        $('.toast-container').filter(':has(.bg-success)').remove();
+    }, 3000);
 }
 
 function formatDate(dateString) {
@@ -72,27 +95,51 @@ function formatPrice(price) {
     }).format(price);
 }
 
-// Get CSRF token
-async function getCsrfToken() {
-    if (!csrfToken && localStorage.getItem('token')) {
-        try {
-            const response = await fetch(`${API_URL}/csrf-token`, {
-                headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
-                }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                csrfToken = data.csrf_token;
-            }
-        } catch (error) {
-            console.warn('Failed to get CSRF token:', error);
-        }
+// Improved CSRF token management
+async function getCsrfToken(forceRefresh = false) {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        console.log('No auth token, skipping CSRF');
+        return null;
     }
-    return csrfToken;
+    
+    // Check if we have a valid CSRF token
+    if (!forceRefresh && csrfToken && csrfTokenExpiry && new Date() < csrfTokenExpiry) {
+        return csrfToken;
+    }
+    
+    try {
+        console.log('Fetching new CSRF token...');
+        const response = await fetch(`${API_URL}/csrf-token`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Cache-Control': 'no-cache'
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            csrfToken = data.csrf_token;
+            // Set expiry to 23 hours from now (tokens are valid for 24 hours)
+            csrfTokenExpiry = new Date(Date.now() + 23 * 60 * 60 * 1000);
+            console.log('CSRF token obtained successfully');
+            return csrfToken;
+        } else {
+            console.warn('Failed to get CSRF token:', response.status);
+            csrfToken = null;
+            csrfTokenExpiry = null;
+            return null;
+        }
+    } catch (error) {
+        console.warn('Failed to get CSRF token:', error);
+        csrfToken = null;
+        csrfTokenExpiry = null;
+        return null;
+    }
 }
 
-// API request helper with better error handling
+// Enhanced API request helper
 async function apiRequest(endpoint, options = {}) {
     const token = localStorage.getItem('token');
     const defaultOptions = {
@@ -111,6 +158,9 @@ async function apiRequest(endpoint, options = {}) {
             const csrf = await getCsrfToken();
             if (csrf) {
                 defaultOptions.headers['X-CSRF-Token'] = csrf;
+                console.log('Added CSRF token to request');
+            } else {
+                console.warn('No CSRF token available for request');
             }
         }
     }
@@ -125,13 +175,16 @@ async function apiRequest(endpoint, options = {}) {
             }
         });
         
-        // Handle different status codes
+        console.log(`API ${options.method || 'GET'} ${endpoint}: ${response.status}`);
+        
+        // Handle specific status codes
         if (response.status === 401) {
-            // Only clear auth if this is not a login attempt
             if (!endpoint.includes('/auth/login')) {
+                console.log('Unauthorized - clearing auth data');
                 localStorage.removeItem('token');
                 currentUser = null;
                 csrfToken = null;
+                csrfTokenExpiry = null;
                 updateAuthUI();
                 showError('Сессия истекла. Пожалуйста, войдите снова.');
             }
@@ -139,19 +192,30 @@ async function apiRequest(endpoint, options = {}) {
         }
         
         if (response.status === 403) {
-            showError('У вас нет прав для выполнения этого действия');
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.detail || 'У вас нет прав для выполнения этого действия';
+            
+            // If CSRF token is invalid, try to refresh it
+            if (errorMessage.includes('CSRF')) {
+                console.log('CSRF token invalid, refreshing...');
+                await getCsrfToken(true); // Force refresh
+                showError('Токен безопасности истек. Попробуйте еще раз.');
+            } else {
+                showError(errorMessage);
+            }
             throw new Error('Forbidden');
         }
         
         if (response.status === 404) {
-            showError('Запрашиваемый ресурс не найден');
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.detail || 'Запрашиваемый ресурс не найден';
+            showError(errorMessage);
             throw new Error('Not Found');
         }
         
         if (response.status === 422) {
             const data = await response.json();
             if (data.detail && Array.isArray(data.detail)) {
-                // Validation errors from FastAPI
                 const errorMessages = data.detail.map(err => err.msg || err.message || 'Ошибка валидации');
                 showError(errorMessages.join(', '));
             } else if (data.detail) {
@@ -186,18 +250,15 @@ async function apiRequest(endpoint, options = {}) {
     } catch (error) {
         if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
             showError('Ошибка подключения к серверу. Проверьте интернет-соединение.');
-        } else if (!error.message.includes('Unauthorized') && 
-                   !error.message.includes('Forbidden') && 
-                   !error.message.includes('Not Found') &&
-                   !error.message.includes('Validation Error') &&
-                   !error.message.includes('Server Error')) {
+        } else if (!['Unauthorized', 'Forbidden', 'Not Found', 'Validation Error', 'Server Error'].includes(error.message)) {
+            console.error('API request error:', error);
             showError(error.message || 'Произошла неизвестная ошибка');
         }
         throw error;
     }
 }
 
-// Page navigation
+// Page navigation with better error handling
 function navigateTo(page) {
     console.log('Navigating to:', page);
     
@@ -267,6 +328,131 @@ window.addEventListener('popstate', () => {
     navigateTo(path || 'events');
 });
 
+// Enhanced authentication status check
+async function checkAuthStatus() {
+    console.log('Checking auth status...');
+    
+    const token = localStorage.getItem('token');
+    if (token) {
+        try {
+            // Split token and decode payload
+            const parts = token.split('.');
+            if (parts.length !== 3) {
+                throw new Error('Invalid token format');
+            }
+            
+            const payload = JSON.parse(atob(parts[1]));
+            console.log('Token payload:', payload);
+            
+            // Check if token is not expired (with 5 minute buffer)
+            const now = Math.floor(Date.now() / 1000);
+            const expiry = payload.exp;
+            
+            if (expiry && expiry > now + 300) { // 5 minute buffer
+                // Create user object with proper structure
+                currentUser = {
+                    user_id: payload.user_id || parseInt(payload.sub),
+                    username: payload.username,
+                    role: payload.role || 'user',
+                    sub: payload.sub
+                };
+                
+                console.log('User authenticated from token:', currentUser);
+                
+                // Try to get additional user info and refresh CSRF token
+                try {
+                    const [userInfo, csrfResponse] = await Promise.allSettled([
+                        apiRequest('/auth/me'),
+                        getCsrfToken()
+                    ]);
+                    
+                    if (userInfo.status === 'fulfilled' && userInfo.value.role) {
+                        currentUser.role = userInfo.value.role;
+                        currentUser.username = userInfo.value.username;
+                        currentUser.email = userInfo.value.email;
+                        currentUser.first_name = userInfo.value.first_name;
+                        currentUser.last_name = userInfo.value.last_name;
+                        console.log('User info updated from API:', currentUser);
+                    }
+                    
+                    if (csrfResponse.status === 'fulfilled') {
+                        console.log('CSRF token obtained during auth check');
+                    }
+                } catch (error) {
+                    console.warn('Could not fetch additional user info:', error);
+                }
+                
+                updateAuthUI();
+                
+            } else {
+                console.log('Token expired or about to expire, removing...');
+                localStorage.removeItem('token');
+                currentUser = null;
+                csrfToken = null;
+                csrfTokenExpiry = null;
+                updateAuthUI();
+            }
+        } catch (error) {
+            console.error('Invalid token, removing...', error);
+            localStorage.removeItem('token');
+            currentUser = null;
+            csrfToken = null;
+            csrfTokenExpiry = null;
+            updateAuthUI();
+        }
+    } else {
+        console.log('No token found');
+        currentUser = null;
+        csrfToken = null;
+        csrfTokenExpiry = null;
+        updateAuthUI();
+    }
+}
+
+// Update UI based on authentication status
+function updateAuthUI() {
+    console.log('Updating auth UI for user:', currentUser);
+    
+    if (currentUser) {
+        $('.auth-buttons').addClass('d-none');
+        $('.user-info').removeClass('d-none');
+        $('.username').text(currentUser.username);
+        
+        // Show/hide auth-required elements
+        $('.auth-required').show();
+        
+        // Show/hide admin-only elements
+        if (['admin', 'moderator'].includes(currentUser.role)) {
+            $('.admin-only').show();
+            console.log('Showing admin elements for role:', currentUser.role);
+        } else {
+            $('.admin-only').hide();
+            console.log('Hiding admin elements for role:', currentUser.role);
+        }
+        
+        // If current page is not accessible, redirect to events
+        const currentPage = window.location.pathname.substring(1) || 'events';
+        if (!canAccessPage(currentPage)) {
+            navigateTo('events');
+        }
+    } else {
+        $('.auth-buttons').removeClass('d-none');
+        $('.user-info').addClass('d-none');
+        $('.auth-required').hide();
+        $('.admin-only').hide();
+        
+        // Clear CSRF token
+        csrfToken = null;
+        csrfTokenExpiry = null;
+        
+        // If on a page requiring auth, redirect to events
+        const currentPage = window.location.pathname.substring(1) || 'events';
+        if (!canAccessPage(currentPage)) {
+            navigateTo('events');
+        }
+    }
+}
+
 // Initialize app
 $(document).ready(function() {
     console.log('Initializing Night Club Booking System...');
@@ -283,25 +469,9 @@ $(document).ready(function() {
     }, 100);
 });
 
-// Debug function to check what's available
-function debugLoadedFunctions() {
-    console.log('=== DEBUG: Checking loaded functions ===');
-    console.log('loadEvents:', typeof loadEvents !== 'undefined' ? '✅ Loaded' : '❌ Missing');
-    console.log('loadMyBookings:', typeof loadMyBookings !== 'undefined' ? '✅ Loaded' : '❌ Missing');
-    console.log('loadAdminPanel:', typeof loadAdminPanel !== 'undefined' ? '✅ Loaded' : '❌ Missing');
-    console.log('loadProfile:', typeof loadProfile !== 'undefined' ? '✅ Loaded' : '❌ Missing');
-    console.log('login:', typeof login !== 'undefined' ? '✅ Loaded' : '❌ Missing');
-    console.log('logout:', typeof logout !== 'undefined' ? '✅ Loaded' : '❌ Missing');
-    console.log('register:', typeof register !== 'undefined' ? '✅ Loaded' : '❌ Missing');
-    console.log('routes:', routes);
-    console.log('currentUser:', currentUser);
-    console.log('=======================================');
-}
-
 // Initialize routes after all scripts are loaded
 function initializeRoutes() {
-    // Debug what's available
-    debugLoadedFunctions();
+    console.log('Initializing routes...');
     
     routes = {
         'events': typeof loadEvents !== 'undefined' ? loadEvents : function() { 
@@ -360,129 +530,39 @@ function setupEventHandlers() {
             navigateTo(page);
         }
     });
+    
+    // Auto-dismiss toasts
+    $(document).on('click', '.toast .btn-close', function() {
+        $(this).closest('.toast-container').remove();
+    });
 }
 
-// Separate function to check auth status
-async function checkAuthStatus() {
-    console.log('Checking auth status...');
-    
-    const token = localStorage.getItem('token');
-    if (token) {
-        try {
-            // Split token and decode payload
-            const parts = token.split('.');
-            if (parts.length !== 3) {
-                throw new Error('Invalid token format');
-            }
-            
-            const payload = JSON.parse(atob(parts[1]));
-            console.log('Token payload:', payload);
-            
-            // Check if token is not expired (with 5 minute buffer)
-            const now = Math.floor(Date.now() / 1000);
-            const expiry = payload.exp;
-            
-            if (expiry && expiry > now + 300) { // 5 minute buffer
-                // Create user object with proper structure
-                currentUser = {
-                    user_id: payload.user_id || parseInt(payload.sub),
-                    username: payload.username,
-                    role: payload.role || 'user',
-                    sub: payload.sub
-                };
-                
-                console.log('User authenticated from token:', currentUser);
-                
-                // Try to get additional user info from API to ensure role is correct
-                try {
-                    const userInfo = await apiRequest('/auth/me');
-                    if (userInfo && userInfo.role) {
-                        currentUser.role = userInfo.role;
-                        currentUser.username = userInfo.username;
-                        currentUser.email = userInfo.email;
-                        currentUser.first_name = userInfo.first_name;
-                        currentUser.last_name = userInfo.last_name;
-                        console.log('User info updated from API:', currentUser);
-                    }
-                } catch (error) {
-                    console.warn('Could not fetch user info, using token data:', error);
-                }
-                
-                updateAuthUI();
-                
-                // Get CSRF token for authenticated users
-                getCsrfToken().catch(err => console.warn('Failed to get CSRF token:', err));
-                
-            } else {
-                console.log('Token expired or about to expire, removing...');
-                localStorage.removeItem('token');
-                currentUser = null;
-                updateAuthUI();
-            }
-        } catch (error) {
-            console.error('Invalid token, removing...', error);
-            localStorage.removeItem('token');
-            currentUser = null;
-            updateAuthUI();
-        }
-    } else {
-        console.log('No token found');
-        currentUser = null;
-        updateAuthUI();
+// Periodic CSRF token refresh (every 20 hours)
+setInterval(async () => {
+    if (currentUser && localStorage.getItem('token')) {
+        console.log('Refreshing CSRF token...');
+        await getCsrfToken(true);
     }
-}
-
-// Update UI based on authentication status
-function updateAuthUI() {
-    console.log('Updating auth UI for user:', currentUser);
-    
-    if (currentUser) {
-        $('.auth-buttons').addClass('d-none');
-        $('.user-info').removeClass('d-none');
-        $('.username').text(currentUser.username);
-        
-        // Show/hide auth-required elements
-        $('.auth-required').show();
-        
-        // Show/hide admin-only elements
-        if (['admin', 'moderator'].includes(currentUser.role)) {
-            $('.admin-only').show();
-            console.log('Showing admin elements for role:', currentUser.role);
-        } else {
-            $('.admin-only').hide();
-            console.log('Hiding admin elements for role:', currentUser.role);
-        }
-        
-        // If current page is not accessible, redirect to events
-        const currentPage = window.location.pathname.substring(1) || 'events';
-        if (!canAccessPage(currentPage)) {
-            navigateTo('events');
-        }
-    } else {
-        $('.auth-buttons').removeClass('d-none');
-        $('.user-info').addClass('d-none');
-        $('.auth-required').hide();
-        $('.admin-only').hide();
-        
-        // If on a page requiring auth, redirect to events
-        const currentPage = window.location.pathname.substring(1) || 'events';
-        if (!canAccessPage(currentPage)) {
-            navigateTo('events');
-        }
-    }
-}
+}, 20 * 60 * 60 * 1000); // 20 hours
 
 // Handle uncaught errors
 window.addEventListener('error', function(e) {
     console.error('Uncaught error:', e.error);
-    // Don't show error toast for every JS error, just log it
 });
 
 // Handle unhandled promise rejections
 window.addEventListener('unhandledrejection', function(e) {
     console.error('Unhandled promise rejection:', e.reason);
-    e.preventDefault(); // Prevent the default browser behavior
+    e.preventDefault();
 });
 
-// Make debug function globally available
-window.debugNightClub = debugLoadedFunctions;
+// Global debug function
+window.debugNightClub = function() {
+    console.log('=== DEBUG INFO ===');
+    console.log('Current User:', currentUser);
+    console.log('CSRF Token:', csrfToken ? csrfToken.substring(0, 20) + '...' : null);
+    console.log('CSRF Expiry:', csrfTokenExpiry);
+    console.log('Auth Token:', localStorage.getItem('token') ? 'Present' : 'None');
+    console.log('Routes:', Object.keys(routes));
+    console.log('================');
+};
