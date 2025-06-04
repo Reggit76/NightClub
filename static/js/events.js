@@ -1,8 +1,190 @@
-// Fixed events.js with better error handling and zone support
+// Complete events.js with booking functionality
 // Global variables for events data
 window.eventsData = [];
 window.categoriesData = [];
 window.zonesData = [];
+
+// Booking selection state
+let selectedZoneId = null;
+let selectedSeatId = null;
+let selectedZonePrice = 0;
+let selectedZoneName = '';
+
+// Define critical booking functions first to avoid ReferenceError
+window.selectZoneForBooking = async function(zoneId, eventId, zoneName, zonePrice) {
+    try {
+        console.log('Selecting zone:', zoneId, zoneName, zonePrice);
+        
+        // Update selection
+        selectedZoneId = zoneId;
+        selectedZonePrice = zonePrice;
+        selectedZoneName = zoneName;
+        selectedSeatId = null; // Reset seat selection
+        
+        // Update UI
+        $('.zone-card').removeClass('selected');
+        $(`.zone-card[data-zone-id="${zoneId}"]`).addClass('selected');
+        
+        // Update booking summary
+        $('#selectedZoneInfo').text(zoneName);
+        $('#selectedSeatInfo').text('Не выбрано');
+        $('#selectedPriceInfo').text(formatPrice(zonePrice));
+        $('#confirmBookingBtn').prop('disabled', true);
+        
+        // Show seat selection card
+        $('#seatSelectionCard').removeClass('d-none');
+        
+        // Load seats for this zone
+        await window.loadSeatsForZone(eventId, zoneId);
+        
+    } catch (error) {
+        console.error('Error selecting zone:', error);
+        showError('Ошибка выбора зоны');
+    }
+};
+
+window.loadSeatsForZone = async function(eventId, zoneId) {
+    try {
+        console.log('Loading seats for zone:', zoneId);
+        
+        // Show loading in seat selection
+        $('#seatSelection').html(`
+            <div class="text-center py-3">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Загрузка мест...</span>
+                </div>
+                <p class="mt-2 text-muted">Загрузка доступных мест...</p>
+            </div>
+        `);
+        
+        // Get seats for this zone and event
+        const response = await apiRequest(`/events/${eventId}/seats?zone_id=${zoneId}`);
+        const seats = response.seats || [];
+        
+        console.log('Seats loaded:', seats.length);
+        
+        if (seats.length === 0) {
+            $('#seatSelection').html(`
+                <div class="alert alert-warning text-center">
+                    <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                    <h6>Нет доступных мест</h6>
+                    <p class="mb-0">В выбранной зоне нет свободных мест</p>
+                </div>
+            `);
+            return;
+        }
+        
+        // Create seat map
+        let seatHTML = '<div class="seat-map d-flex flex-wrap justify-content-center gap-2">';
+        
+        seats.forEach(seat => {
+            const isBooked = seat.is_booked;
+            const seatClass = isBooked ? 'seat booked' : 'seat available';
+            const onclick = !isBooked ? `onclick="selectSeat(${seat.seat_id}, '${seat.seat_number}')"` : '';
+            
+            seatHTML += `
+                <div class="${seatClass}" ${onclick} 
+                     data-seat-id="${seat.seat_id}"
+                     title="${isBooked ? 'Место занято' : 'Место ' + seat.seat_number + ' - ' + formatPrice(selectedZonePrice)}">
+                    ${seat.seat_number}
+                </div>
+            `;
+        });
+        
+        seatHTML += '</div>';
+        
+        $('#seatSelection').html(seatHTML);
+        
+    } catch (error) {
+        console.error('Error loading seats:', error);
+        $('#seatSelection').html(`
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                Ошибка загрузки мест: ${error.message}
+            </div>
+        `);
+    }
+};
+
+window.selectSeat = function(seatId, seatNumber) {
+    console.log('Selecting seat:', seatId, seatNumber);
+    
+    // Update selection
+    selectedSeatId = seatId;
+    
+    // Update UI
+    $('.seat').removeClass('selected');
+    $(`.seat[data-seat-id="${seatId}"]`).addClass('selected');
+    
+    // Update booking summary
+    $('#selectedSeatInfo').text(`Место ${seatNumber}`);
+    $('#confirmBookingBtn').prop('disabled', false);
+};
+
+window.proceedToBooking = async function() {
+    try {
+        if (!selectedZoneId || !selectedSeatId) {
+            showError('Пожалуйста, выберите зону и место');
+            return;
+        }
+        
+        if (!currentUser) {
+            showError('Пожалуйста, войдите в систему');
+            showLoginModal();
+            return;
+        }
+        
+        const event = window.currentBookingEvent;
+        if (!event) {
+            showError('Информация о мероприятии недоступна');
+            return;
+        }
+        
+        console.log('Creating booking:', {
+            eventId: event.event_id,
+            seatId: selectedSeatId,
+            zonePrice: selectedZonePrice
+        });
+        
+        // Disable booking button
+        const bookingBtn = $('#confirmBookingBtn');
+        const originalText = bookingBtn.html();
+        bookingBtn.prop('disabled', true)
+                  .html('<i class="fas fa-spinner fa-spin me-1"></i>Создание...');
+        
+        // Create booking using the function from bookings.js
+        await createBooking(event.event_id, selectedSeatId, selectedZonePrice);
+        
+    } catch (error) {
+        console.error('Booking error:', error);
+        showError(error.message || 'Ошибка создания бронирования');
+        
+        // Restore button
+        $('#confirmBookingBtn').prop('disabled', false)
+                              .html('<i class="fas fa-check me-1"></i>Создать бронирование');
+    }
+};
+
+window.resetBookingSelection = function() {
+    console.log('Resetting booking selection');
+    
+    // Reset selection variables
+    selectedZoneId = null;
+    selectedSeatId = null;
+    selectedZonePrice = 0;
+    selectedZoneName = '';
+    
+    // Reset UI
+    $('.zone-card').removeClass('selected');
+    $('.seat').removeClass('selected');
+    $('#seatSelectionCard').addClass('d-none');
+    
+    // Reset summary
+    $('#selectedZoneInfo').text('Не выбрана');
+    $('#selectedSeatInfo').text('Не выбрано');
+    $('#selectedPriceInfo').text('Не указана');
+    $('#confirmBookingBtn').prop('disabled', true);
+};
 
 // Load events page
 async function loadEvents() {
@@ -293,6 +475,8 @@ async function loadEvents() {
         `);
     }
 }
+// Make immediately available
+window.loadEvents = loadEvents;
 
 // Enhanced create event modal with better error handling
 function showCreateEventModal() {
@@ -503,6 +687,8 @@ function showCreateEventModal() {
     
     console.log('Create event modal shown with zones');
 }
+// Make immediately available
+window.showCreateEventModal = showCreateEventModal;
 
 // Toggle zone configuration
 function toggleZoneConfig(zoneId) {
@@ -526,6 +712,8 @@ function toggleZoneConfig(zoneId) {
     
     updateEventSummary();
 }
+// Make immediately available
+window.toggleZoneConfig = toggleZoneConfig;
 
 // Update event summary
 function updateEventSummary() {
@@ -572,6 +760,8 @@ function updateEventSummary() {
         createBtn.disabled = selectedZones.length === 0;
     }
 }
+// Make immediately available
+window.updateEventSummary = updateEventSummary;
 
 // Listen for changes in zone inputs
 $(document).on('input', '.zone-seats, .zone-price', updateEventSummary);
@@ -684,9 +874,6 @@ async function createEventWithZones() {
         submitBtn.innerHTML = originalText;
     }
 }
-
-// Rest of the functions (showEventDetails, showBookingModal, etc.) remain the same
-// but with better error handling...
 
 // Show event details modal
 async function showEventDetails(eventId) {
@@ -804,7 +991,7 @@ async function showEventDetails(eventId) {
     }
 }
 
-// Enhanced booking modal with full zone and seat selection
+// Show booking modal
 async function showBookingModal(eventId) {
     try {
         if (!currentUser) {
@@ -1037,6 +1224,9 @@ async function showBookingModal(eventId) {
         // Store event data for booking
         window.currentBookingEvent = event;
         
+        // Reset booking selection state
+        resetBookingSelection();
+        
         console.log('Booking modal loaded successfully');
         
     } catch (error) {
@@ -1057,72 +1247,23 @@ async function showBookingModal(eventId) {
         `);
     }
 }
+// Make immediately available
+window.showBookingModal = showBookingModal;
 
-// Filter and utility functions
-function filterEvents() {
-    const categoryFilter = document.getElementById('categoryFilter')?.value;
-    const dateFromFilter = document.getElementById('dateFromFilter')?.value;
-    const dateToFilter = document.getElementById('dateToFilter')?.value;
-    
-    const eventCards = document.querySelectorAll('[data-category]');
-    
-    eventCards.forEach(card => {
-        let show = true;
-        
-        // Category filter
-        if (categoryFilter && card.dataset.category !== categoryFilter) {
-            show = false;
-        }
-        
-        // Date filters
-        const eventDate = new Date(card.dataset.date);
-        if (dateFromFilter && eventDate < new Date(dateFromFilter)) {
-            show = false;
-        }
-        if (dateToFilter && eventDate > new Date(dateToFilter + 'T23:59:59')) {
-            show = false;
-        }
-        
-        card.style.display = show ? 'block' : 'none';
-    });
-}
+// Make all other functions immediately available
+window.showEventDetails = async function(eventId) { return await showEventDetails(eventId); };
+window.showEditEventModal = async function(eventId) { return await showEditEventModal(eventId); };
+window.filterEvents = function() { return filterEvents(); };
+window.clearFilters = function() { return clearFilters(); };
+window.deleteEvent = async function(eventId) { return await deleteEvent(eventId); };
+window.createEventWithZones = async function() { return await createEventWithZones(); };
 
-function clearFilters() {
-    const categoryFilter = document.getElementById('categoryFilter');
-    const dateFromFilter = document.getElementById('dateFromFilter');
-    const dateToFilter = document.getElementById('dateToFilter');
-    
-    if (categoryFilter) categoryFilter.value = '';
-    if (dateFromFilter) dateFromFilter.value = '';
-    if (dateToFilter) dateToFilter.value = '';
-    
-    filterEvents();
-}
-
-// Delete event
-async function deleteEvent(eventId) {
-    if (!confirm('Вы уверены, что хотите удалить это мероприятие?')) {
-        return;
-    }
-    
-    try {
-        await apiRequest(`/events/${eventId}`, {
-            method: 'DELETE'
-        });
-        
-        showSuccess('Мероприятие успешно удалено');
-        loadEvents();
-    } catch (error) {
-        console.error('Delete event error:', error);
-        showError(error.message || 'Не удалось удалить мероприятие');
-    }
-}
-
-// Make functions globally available
+// Make all remaining functions immediately available
 window.loadEvents = loadEvents;
 window.showCreateEventModal = showCreateEventModal;
-window.showEventDetails = showEventDetails;
 window.showBookingModal = showBookingModal;
+window.showEventDetails = showEventDetails;
+window.showEditEventModal = showEditEventModal;
 window.filterEvents = filterEvents;
 window.clearFilters = clearFilters;
 window.deleteEvent = deleteEvent;
