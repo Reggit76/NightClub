@@ -3,7 +3,11 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import date, datetime
 from database import get_db_cursor
-from utils.auth import get_current_user, verify_password, get_password_hash
+from utils.auth import (
+    get_current_user, 
+    verify_password, 
+    get_password_hash
+)
 from utils.helpers import log_user_action
 import json
 
@@ -22,7 +26,7 @@ class PasswordUpdate(BaseModel):
 class AccountDelete(BaseModel):
     password: str
 
-@router.get("/")
+@router.get("/me")
 async def get_profile(current_user: dict = Depends(get_current_user)):
     """Get user profile"""
     with get_db_cursor() as cur:
@@ -64,7 +68,7 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
         
         return result
 
-@router.put("/")
+@router.put("/me")
 async def update_profile(
     profile: ProfileUpdate,
     current_user: dict = Depends(get_current_user)
@@ -159,7 +163,7 @@ async def update_profile(
         )
         return cur.fetchone()
 
-@router.put("/password")
+@router.put("/me/password")
 async def update_password(
     password_update: PasswordUpdate,
     current_user: dict = Depends(get_current_user)
@@ -200,7 +204,7 @@ async def update_password(
         
         return {"message": "Password updated successfully"}
 
-@router.delete("/")
+@router.delete("/me")
 async def delete_account(
     account_delete: AccountDelete,
     current_user: dict = Depends(get_current_user)
@@ -255,3 +259,17 @@ async def delete_account(
         )
         
         return {"message": "Account successfully deleted"}
+
+# Legacy endpoint for backward compatibility
+@router.get("/")
+async def get_profile_legacy(current_user: dict = Depends(get_current_user)):
+    """Get user profile (legacy endpoint)"""
+    return await get_profile(current_user)
+
+@router.put("/")
+async def update_profile_legacy(
+    profile: ProfileUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update user profile (legacy endpoint)"""
+    return await update_profile(profile, current_user)

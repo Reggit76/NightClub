@@ -1,6 +1,9 @@
+// Fixed bookings.js with better error handling
 // Load my bookings page
 async function loadMyBookings() {
     try {
+        console.log('Loading my bookings...');
+        
         // Check authentication first
         if (!currentUser) {
             showError('Пожалуйста, войдите в систему для просмотра бронирований');
@@ -8,8 +11,26 @@ async function loadMyBookings() {
             return;
         }
 
-        console.log('Loading bookings...');
+        // Show loading
+        $('#content').html(`
+            <div class="row mb-4">
+                <div class="col">
+                    <h2><i class="fas fa-ticket-alt me-2"></i>Мои бронирования</h2>
+                </div>
+            </div>
+            <div class="d-flex justify-content-center align-items-center" style="min-height: 300px;">
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Загрузка...</span>
+                    </div>
+                    <p class="mt-3 text-muted">Загрузка ваших бронирований...</p>
+                </div>
+            </div>
+        `);
+
+        console.log('Fetching bookings...');
         const bookings = await apiRequest('/bookings/my');
+        console.log('Bookings loaded:', bookings.length);
         
         let html = `
             <div class="row mb-4">
@@ -21,31 +42,35 @@ async function loadMyBookings() {
         
         if (!bookings || bookings.length === 0) {
             html += `
-                <div class="alert alert-info">
+                <div class="alert alert-info text-center">
                     <i class="fas fa-info-circle me-2"></i>
                     У вас пока нет бронирований. 
-                    <a href="#" onclick="navigateTo('events')">Посмотреть доступные мероприятия</a>
+                    <a href="#" onclick="navigateTo('events')" class="alert-link">Посмотреть доступные мероприятия</a>
                 </div>
             `;
         } else {
             html += `
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>Мероприятие</th>
-                                <th>Дата</th>
-                                <th>Место</th>
-                                <th>Статус</th>
-                                <th>Цена</th>
-                                <th>Действия</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+                <div class="card">
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Мероприятие</th>
+                                        <th>Дата</th>
+                                        <th>Место</th>
+                                        <th>Статус</th>
+                                        <th>Цена</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
             `;
             
             bookings.forEach(booking => {
                 const statusBadge = getStatusBadge(booking.status);
+                const paymentStatusBadge = booking.payment_status ? 
+                    getPaymentStatusBadge(booking.payment_status) : '';
                 
                 html += `
                     <tr>
@@ -53,30 +78,43 @@ async function loadMyBookings() {
                             <strong>${booking.event_title}</strong>
                             ${booking.zone_name ? `<br><small class="text-muted">Зона: ${booking.zone_name}</small>` : ''}
                         </td>
-                        <td>${formatDate(booking.event_date)}</td>
-                        <td>Место ${booking.seat_number}</td>
-                        <td>${statusBadge}</td>
-                        <td>${formatPrice(booking.price)}</td>
                         <td>
-                            <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-primary" 
-                                        onclick="showBookingDetails(${booking.booking_id})">
+                            <small>${formatDate(booking.event_date)}</small>
+                        </td>
+                        <td>
+                            <span class="badge bg-light text-dark">Место ${booking.seat_number}</span>
+                        </td>
+                        <td>
+                            ${statusBadge}
+                            ${paymentStatusBadge ? `<br>${paymentStatusBadge}` : ''}
+                        </td>
+                        <td>
+                            <strong class="text-success">${formatPrice(booking.price || 0)}</strong>
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary" 
+                                        onclick="showBookingDetails(${booking.booking_id})"
+                                        title="Подробности">
                                     <i class="fas fa-info-circle"></i>
                                 </button>
                                 ${booking.status === 'pending' ? `
-                                    <button class="btn btn-sm btn-outline-success" 
-                                            onclick="confirmBooking(${booking.booking_id})">
+                                    <button class="btn btn-outline-success" 
+                                            onclick="confirmBooking(${booking.booking_id})"
+                                            title="Подтвердить">
                                         <i class="fas fa-check"></i>
                                     </button>
-                                    <button class="btn btn-sm btn-outline-danger" 
-                                            onclick="cancelBooking(${booking.booking_id})">
+                                    <button class="btn btn-outline-danger" 
+                                            onclick="cancelBooking(${booking.booking_id})"
+                                            title="Отменить">
                                         <i class="fas fa-times"></i>
                                     </button>
                                 ` : ''}
-                                ${booking.status === 'confirmed' && !booking.payment_status ? `
-                                    <button class="btn btn-sm btn-success" 
-                                            onclick="showPaymentModal(${booking.booking_id})">
-                                        <i class="fas fa-credit-card me-1"></i>Оплатить
+                                ${booking.status === 'confirmed' && (!booking.payment_status || booking.payment_status === 'pending') ? `
+                                    <button class="btn btn-success btn-sm" 
+                                            onclick="showPaymentModal(${booking.booking_id})"
+                                            title="Оплатить">
+                                        <i class="fas fa-credit-card"></i>
                                     </button>
                                 ` : ''}
                             </div>
@@ -89,24 +127,54 @@ async function loadMyBookings() {
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
             `;
         }
         
         $('#content').html(html);
+        console.log('My bookings page loaded successfully');
         
     } catch (error) {
         console.error('Failed to load bookings:', error);
+        
+        let errorHtml = `
+            <div class="row mb-4">
+                <div class="col">
+                    <h2><i class="fas fa-ticket-alt me-2"></i>Мои бронирования</h2>
+                </div>
+            </div>
+        `;
+        
         if (error.message === 'Unauthorized') {
-            showLoginModal();
+            errorHtml += `
+                <div class="alert alert-warning text-center">
+                    <i class="fas fa-lock fa-3x mb-3"></i>
+                    <h4>Требуется авторизация</h4>
+                    <p>Для просмотра бронирований необходимо войти в систему.</p>
+                    <button class="btn btn-primary" onclick="showLoginModal()">
+                        <i class="fas fa-sign-in-alt me-1"></i>Войти
+                    </button>
+                </div>
+            `;
         } else {
-            $('#content').html(`
+            errorHtml += `
                 <div class="alert alert-danger">
                     <i class="fas fa-exclamation-triangle me-2"></i>
-                    Не удалось загрузить бронирования. Пожалуйста, попробуйте позже.
-                    <br><small>Ошибка: ${error.message}</small>
+                    <strong>Ошибка загрузки бронирований</strong>
+                    <p class="mb-2">Не удалось загрузить ваши бронирования.</p>
+                    <details>
+                        <summary>Подробности ошибки</summary>
+                        <pre class="mt-2">${error.message}</pre>
+                    </details>
+                    <button class="btn btn-primary mt-2" onclick="loadMyBookings()">
+                        <i class="fas fa-redo me-1"></i>Попробовать снова
+                    </button>
                 </div>
-            `);
+            `;
         }
+        
+        $('#content').html(errorHtml);
     }
 }
 
@@ -177,6 +245,10 @@ async function confirmBooking(bookingId) {
 
 // Cancel booking
 async function cancelBooking(bookingId) {
+    if (!confirm('Вы уверены, что хотите отменить это бронирование?')) {
+        return;
+    }
+    
     try {
         // Check authentication first
         if (!currentUser) {
@@ -219,59 +291,80 @@ async function showBookingDetails(bookingId) {
                     <div class="modal-content">
                         <div class="modal-header">
                             <h5 class="modal-title">
-                                <i class="fas fa-ticket-alt me-2"></i>Детали бронирования
+                                <i class="fas fa-ticket-alt me-2"></i>Детали бронирования #${booking.booking_id}
                             </h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                         </div>
                         <div class="modal-body">
-                            <div class="mb-3">
-                                <h6>Мероприятие</h6>
-                                <p>${booking.event_title}</p>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <h6>Дата и время</h6>
-                                <p>${formatDate(booking.event_date)}</p>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <h6>Место</h6>
-                                <p>
-                                    Зона: ${booking.zone_name}<br>
-                                    Место: ${booking.seat_number}
-                                </p>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <h6>Статус</h6>
-                                <p>${getStatusBadge(booking.status)}</p>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <h6>Цена</h6>
-                                <p>${formatPrice(booking.price)}</p>
-                            </div>
-                            
-                            ${booking.payment_status ? `
-                                <div class="mb-3">
-                                    <h6>Оплата</h6>
-                                    <p>
-                                        Статус: ${getPaymentStatusBadge(booking.payment_status)}<br>
-                                        Метод: ${booking.payment_method || 'Не указан'}<br>
-                                        Дата: ${formatDate(booking.payment_date)}
-                                    </p>
+                            <div class="row">
+                                <div class="col-md-8">
+                                    <div class="mb-3">
+                                        <h6>Мероприятие</h6>
+                                        <p><strong>${booking.event_title}</strong></p>
+                                        ${booking.event_description ? `<p class="text-muted">${booking.event_description}</p>` : ''}
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <h6>Дата и время</h6>
+                                        <p>${formatDate(booking.event_date)}</p>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <h6>Место</h6>
+                                        <p>
+                                            <strong>Зона:</strong> ${booking.zone_name}<br>
+                                            <strong>Место:</strong> ${booking.seat_number}
+                                        </p>
+                                    </div>
                                 </div>
-                            ` : ''}
+                                <div class="col-md-4">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h6 class="mb-0">Статус и оплата</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="mb-3">
+                                                <strong>Статус бронирования:</strong><br>
+                                                ${getStatusBadge(booking.status)}
+                                            </div>
+                                            
+                                            <div class="mb-3">
+                                                <strong>Цена:</strong><br>
+                                                <span class="fs-5 text-success">${formatPrice(booking.price || 0)}</span>
+                                            </div>
+                                            
+                                            ${booking.payment_status ? `
+                                                <div class="mb-3">
+                                                    <strong>Статус оплаты:</strong><br>
+                                                    ${getPaymentStatusBadge(booking.payment_status)}
+                                                </div>
+                                                ${booking.payment_method ? `
+                                                    <div class="mb-3">
+                                                        <strong>Способ оплаты:</strong><br>
+                                                        ${translatePaymentMethod(booking.payment_method)}
+                                                    </div>
+                                                ` : ''}
+                                                ${booking.payment_date ? `
+                                                    <div class="mb-3">
+                                                        <strong>Дата оплаты:</strong><br>
+                                                        ${formatDate(booking.payment_date)}
+                                                    </div>
+                                                ` : ''}
+                                            ` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                                Закрыть
-                            </button>
-                            ${booking.status === 'confirmed' && !booking.payment_status ? `
-                                <button type="button" class="btn btn-success" onclick="showPaymentModal(${booking.booking_id})">
+                            ${booking.status === 'confirmed' && (!booking.payment_status || booking.payment_status === 'pending') ? `
+                                <button type="button" class="btn btn-success" onclick="$('#bookingDetailsModal').modal('hide'); showPaymentModal(${booking.booking_id})">
                                     <i class="fas fa-credit-card me-1"></i>Оплатить
                                 </button>
                             ` : ''}
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                                Закрыть
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -295,91 +388,7 @@ async function showBookingDetails(bookingId) {
     }
 }
 
-// Helper function to get status badge HTML
-function getStatusBadge(status) {
-    const badges = {
-        'pending': '<span class="badge bg-warning">Ожидает подтверждения</span>',
-        'confirmed': '<span class="badge bg-success">Подтверждено</span>',
-        'cancelled': '<span class="badge bg-danger">Отменено</span>',
-        'completed': '<span class="badge bg-info">Завершено</span>'
-    };
-    return badges[status] || `<span class="badge bg-secondary">${status}</span>`;
-}
-
-// Helper function to get payment status badge HTML
-function getPaymentStatusBadge(status) {
-    const badges = {
-        'pending': '<span class="badge bg-warning">Ожидает оплаты</span>',
-        'completed': '<span class="badge bg-success">Оплачено</span>',
-        'failed': '<span class="badge bg-danger">Ошибка оплаты</span>',
-        'refunded': '<span class="badge bg-info">Возвращено</span>'
-    };
-    return badges[status] || `<span class="badge bg-secondary">${status}</span>`;
-}
-
-// Get status badge color
-function getStatusBadgeColor(status) {
-    switch (status) {
-        case 'confirmed':
-            return 'success';
-        case 'pending':
-            return 'warning';
-        case 'cancelled':
-            return 'danger';
-        default:
-            return 'secondary';
-    }
-}
-
-// Translate booking status
-function translateStatus(status) {
-    switch (status) {
-        case 'confirmed':
-            return 'Подтверждено';
-        case 'pending':
-            return 'Ожидает оплаты';
-        case 'cancelled':
-            return 'Отменено';
-        default:
-            return status;
-    }
-}
-
-// Translate payment status
-function translatePaymentStatus(status) {
-    switch (status) {
-        case 'completed':
-            return 'Оплачено';
-        case 'pending':
-            return 'Ожидает оплаты';
-        case 'failed':
-            return 'Ошибка оплаты';
-        case 'refunded':
-            return 'Возвращено';
-        default:
-            return status;
-    }
-}
-
-// Translate payment method
-function translatePaymentMethod(method) {
-    switch (method) {
-        case 'credit_card':
-            return 'Кредитная карта';
-        case 'debit_card':
-            return 'Дебетовая карта';
-        case 'paypal':
-            return 'PayPal';
-        case 'apple_pay':
-            return 'Apple Pay';
-        case 'google_pay':
-            return 'Google Pay';
-        default:
-            return method;
-    }
-}
-
-// Show payment modal (this function is also used from events.js)
+// Show payment modal
 function showPaymentModal(bookingId) {
     const html = `
         <div class="modal fade" id="paymentModal" tabindex="-1">
@@ -424,7 +433,7 @@ function showPaymentModal(bookingId) {
     $('#paymentModal').remove();
     
     // Add new modal to DOM and show it
-    $('body').append(html);
+    $('body').append(modal);
     $('#paymentModal').modal('show');
     
     // Payment form handler
@@ -450,17 +459,65 @@ function showPaymentModal(bookingId) {
             $('#paymentModal').modal('hide');
             showSuccess('Платеж успешно обработан! Ваше бронирование подтверждено.');
             
-            // Refresh bookings if we're on the bookings page
-            if (window.location.pathname.includes('my-bookings')) {
-                loadMyBookings();
-            } else {
-                navigateTo('my-bookings');
-            }
+            // Refresh bookings
+            loadMyBookings();
+            
         } catch (error) {
-            // Error is handled by apiRequest
+            showError(error.message || 'Ошибка обработки платежа');
         } finally {
             // Restore button state
             submitBtn.prop('disabled', false).html(originalText);
         }
     });
 }
+
+// Helper function to get status badge HTML
+function getStatusBadge(status) {
+    const badges = {
+        'pending': '<span class="badge bg-warning">Ожидает подтверждения</span>',
+        'confirmed': '<span class="badge bg-success">Подтверждено</span>',
+        'cancelled': '<span class="badge bg-danger">Отменено</span>',
+        'completed': '<span class="badge bg-info">Завершено</span>'
+    };
+    return badges[status] || `<span class="badge bg-secondary">${status}</span>`;
+}
+
+// Helper function to get payment status badge HTML
+function getPaymentStatusBadge(status) {
+    const badges = {
+        'pending': '<span class="badge bg-warning">Ожидает оплаты</span>',
+        'completed': '<span class="badge bg-success">Оплачено</span>',
+        'failed': '<span class="badge bg-danger">Ошибка оплаты</span>',
+        'refunded': '<span class="badge bg-info">Возвращено</span>'
+    };
+    return badges[status] || `<span class="badge bg-secondary">${status}</span>`;
+}
+
+// Translate payment method
+function translatePaymentMethod(method) {
+    switch (method) {
+        case 'credit_card':
+            return 'Кредитная карта';
+        case 'debit_card':
+            return 'Дебетовая карта';
+        case 'paypal':
+            return 'PayPal';
+        case 'apple_pay':
+            return 'Apple Pay';
+        case 'google_pay':
+            return 'Google Pay';
+        default:
+            return method;
+    }
+}
+
+// Make functions globally available
+window.loadMyBookings = loadMyBookings;
+window.createBooking = createBooking;
+window.confirmBooking = confirmBooking;
+window.cancelBooking = cancelBooking;
+window.showBookingDetails = showBookingDetails;
+window.showPaymentModal = showPaymentModal;
+window.getStatusBadge = getStatusBadge;
+window.getPaymentStatusBadge = getPaymentStatusBadge;
+window.translatePaymentMethod = translatePaymentMethod;

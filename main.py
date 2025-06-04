@@ -1,4 +1,4 @@
-# Updated main.py with improved auth handling
+# Fixed main.py with proper router configuration
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -126,9 +126,12 @@ try:
     app.include_router(events.router, prefix=f"{API_PREFIX}/events", tags=["Events"])
     app.include_router(bookings.router, prefix=f"{API_PREFIX}/bookings", tags=["Bookings"])
     app.include_router(admin.router, prefix=f"{API_PREFIX}", tags=["Administration"])
+    
+    # FIXED: Include profile router with correct prefix
     app.include_router(profile.router, prefix=f"{API_PREFIX}/users", tags=["User Profile"])
     
     logger.info("✅ All routers loaded successfully")
+    logger.info(f"📍 Profile endpoints available at: {API_PREFIX}/users/")
     
 except ImportError as e:
     logger.error(f"❌ Failed to import routers: {e}")
@@ -158,7 +161,7 @@ async def get_system_info():
             "events": f"{API_PREFIX}/events", 
             "bookings": f"{API_PREFIX}/bookings",
             "admin": f"{API_PREFIX}/admin",
-            "profile": f"{API_PREFIX}/users"
+            "profile": f"{API_PREFIX}/users"  # FIXED: Updated endpoint info
         },
         "static_pages": [
             "/profile.html",
@@ -174,6 +177,63 @@ async def verify_user(current_user: dict = Depends(get_current_user)):
         "valid": True,
         "user": current_user
     }
+
+# FIXED: Add specific endpoint for auth/me for backward compatibility
+@app.get(f"{API_PREFIX}/auth/me")
+async def get_auth_me(current_user: dict = Depends(get_current_user)):
+    """Get current user info via auth endpoint (backward compatibility)"""
+    try:
+        from database import get_db_cursor
+        
+        with get_db_cursor() as cur:
+            # Get user and profile data using user_id from token
+            user_id = current_user.get("user_id")
+            
+            cur.execute(
+                """
+                SELECT u.*, p.first_name, p.last_name
+                FROM users u
+                LEFT JOIN user_profiles p ON u.user_id = p.user_id
+                WHERE u.user_id = %s AND u.is_active = true
+                """,
+                (user_id,)
+            )
+            user_data = cur.fetchone()
+            
+            if not user_data:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Get user statistics
+            cur.execute(
+                """
+                SELECT 
+                    COUNT(*) as total_bookings,
+                    COUNT(CASE WHEN status = 'confirmed' THEN 1 END) as active_bookings,
+                    COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_bookings
+                FROM bookings 
+                WHERE user_id = %s
+                """,
+                (user_id,)
+            )
+            stats = cur.fetchone()
+            
+            return {
+                "user_id": user_data["user_id"],
+                "email": user_data["email"],
+                "username": user_data["username"],
+                "first_name": user_data["first_name"],
+                "last_name": user_data["last_name"],
+                "role": user_data["role"],
+                "is_active": user_data["is_active"],
+                "stats": dict(stats) if stats else {}
+            }
+            
+    except Exception as e:
+        logger.error(f"Error getting user info via auth/me: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get user info: {str(e)}"
+        )
 
 # Custom StaticFiles class with enhanced headers
 class EnhancedStaticFiles(StaticFiles):

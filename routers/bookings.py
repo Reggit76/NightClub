@@ -34,7 +34,7 @@ async def create_booking(
             FROM events e
             LEFT JOIN event_zones ez ON e.event_id = ez.event_id
             LEFT JOIN seats s ON s.zone_id = ez.zone_id
-            WHERE e.event_id = %s AND s.seat_id = %s AND e.status = 'active'
+            WHERE e.event_id = %s AND s.seat_id = %s AND e.status = 'planned'
             """,
             (booking.event_id, booking.seat_id)
         )
@@ -56,9 +56,9 @@ async def create_booking(
         # Create booking
         cur.execute(
             """
-            INSERT INTO bookings (event_id, user_id, seat_id, status)
-            VALUES (%s, %s, %s, 'pending')
-            RETURNING booking_id, event_id, user_id, seat_id, status, created_at
+            INSERT INTO bookings (event_id, user_id, seat_id, status, booking_date)
+            VALUES (%s, %s, %s, 'pending', CURRENT_TIMESTAMP)
+            RETURNING booking_id, event_id, user_id, seat_id, status, booking_date
             """,
             (booking.event_id, current_user["user_id"], booking.seat_id)
         )
@@ -67,11 +67,11 @@ async def create_booking(
         # Create pending transaction
         cur.execute(
             """
-            INSERT INTO transactions (booking_id, amount, status, payment_method)
-            VALUES (%s, %s, 'pending', 'pending')
+            INSERT INTO transactions (booking_id, user_id, amount, status, payment_method, transaction_date)
+            VALUES (%s, %s, %s, 'pending', 'pending', CURRENT_TIMESTAMP)
             RETURNING transaction_id
             """,
-            (new_booking["booking_id"], price)
+            (new_booking["booking_id"], current_user["user_id"], price)
         )
         transaction = cur.fetchone()
         
@@ -102,14 +102,14 @@ async def get_my_bookings(current_user: dict = Depends(get_current_user)):
             SELECT b.*, e.title as event_title, e.event_date,
                    s.seat_number, z.name as zone_name,
                    t.status as payment_status, t.payment_method, t.amount as price,
-                   t.created_at as payment_date
+                   t.transaction_date as payment_date
             FROM bookings b
             JOIN events e ON b.event_id = e.event_id
             JOIN seats s ON b.seat_id = s.seat_id
             JOIN club_zones z ON s.zone_id = z.zone_id
             LEFT JOIN transactions t ON b.booking_id = t.booking_id
             WHERE b.user_id = %s
-            ORDER BY b.created_at DESC
+            ORDER BY b.booking_date DESC
             """,
             (current_user["user_id"],)
         )
@@ -128,7 +128,7 @@ async def get_booking(
             SELECT b.*, e.title as event_title, e.event_date, e.description as event_description,
                    s.seat_number, z.name as zone_name,
                    t.status as payment_status, t.payment_method, t.amount as price,
-                   t.created_at as payment_date
+                   t.transaction_date as payment_date
             FROM bookings b
             JOIN events e ON b.event_id = e.event_id
             JOIN seats s ON b.seat_id = s.seat_id
@@ -301,7 +301,7 @@ async def process_payment(
         cur.execute(
             """
             UPDATE transactions
-            SET status = 'completed', payment_method = %s
+            SET status = 'completed', payment_method = %s, transaction_date = CURRENT_TIMESTAMP
             WHERE booking_id = %s
             RETURNING *
             """,
