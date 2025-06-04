@@ -804,7 +804,7 @@ async function showEventDetails(eventId) {
     }
 }
 
-// Enhanced booking modal (placeholder - full implementation would be similar)
+// Enhanced booking modal with full zone and seat selection
 async function showBookingModal(eventId) {
     try {
         if (!currentUser) {
@@ -812,9 +812,249 @@ async function showBookingModal(eventId) {
             return;
         }
         
-        showError('Функция бронирования будет реализована после исправления API');
+        console.log('Loading booking modal for event:', eventId);
+        
+        // Show loading modal first
+        const loadingModal = `
+            <div class="modal fade" id="bookingModal" tabindex="-1">
+                <div class="modal-dialog modal-xl">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">
+                                <i class="fas fa-ticket-alt me-2"></i>Бронирование билетов
+                            </h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="d-flex justify-content-center align-items-center" style="min-height: 200px;">
+                                <div class="text-center">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">Загрузка...</span>
+                                    </div>
+                                    <p class="mt-3 text-muted">Загрузка информации о мероприятии...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        $('#bookingModal').remove();
+        $('body').append(loadingModal);
+        $('#bookingModal').modal('show');
+        
+        // Load event details
+        const event = await apiRequest(`/events/${eventId}`);
+        console.log('Event loaded for booking:', event);
+        
+        if (!event.zones || event.zones.length === 0) {
+            $('#bookingModal .modal-body').html(`
+                <div class="alert alert-warning text-center">
+                    <i class="fas fa-exclamation-triangle fa-3x mb-3"></i>
+                    <h4>Конфигурация зон недоступна</h4>
+                    <p>Для этого мероприятия не настроены зоны. Обратитесь к администратору.</p>
+                </div>
+            `);
+            return;
+        }
+        
+        // Check if event is bookable
+        if (event.status !== 'planned') {
+            $('#bookingModal .modal-body').html(`
+                <div class="alert alert-danger text-center">
+                    <i class="fas fa-ban fa-3x mb-3"></i>
+                    <h4>Бронирование недоступно</h4>
+                    <p>Статус мероприятия: <strong>${event.status}</strong></p>
+                    <p>Бронирование доступно только для запланированных мероприятий.</p>
+                </div>
+            `);
+            return;
+        }
+        
+        if (new Date(event.event_date) <= new Date()) {
+            $('#bookingModal .modal-body').html(`
+                <div class="alert alert-danger text-center">
+                    <i class="fas fa-clock fa-3x mb-3"></i>
+                    <h4>Мероприятие уже началось</h4>
+                    <p>Бронирование билетов на прошедшие мероприятия невозможно.</p>
+                </div>
+            `);
+            return;
+        }
+        
+        // Build the full booking modal
+        let html = `
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-ticket-alt me-2"></i>Бронирование билетов - ${event.title}
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-lg-8">
+                        <!-- Event Info -->
+                        <div class="card mb-3">
+                            <div class="card-body">
+                                <h6><i class="fas fa-info-circle me-1"></i>О мероприятии</h6>
+                                <p class="mb-1"><strong>${event.title}</strong></p>
+                                <p class="text-muted mb-2">${event.description}</p>
+                                <small class="text-muted">
+                                    <i class="fas fa-calendar me-1"></i>${formatDate(event.event_date)}
+                                    ${event.duration ? `• <i class="fas fa-clock me-1"></i>${event.duration}` : ''}
+                                </small>
+                            </div>
+                        </div>
+                        
+                        <!-- Zone Selection -->
+                        <div class="card mb-3">
+                            <div class="card-header">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-map-marked-alt me-1"></i>Шаг 1: Выберите зону
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="row" id="zoneSelection">
+                                    ${event.zones.map(zone => {
+                                        const availableSeats = zone.available_seats || 0;
+                                        const isUnavailable = availableSeats === 0;
+                                        
+                                        return `
+                                            <div class="col-md-6 mb-3">
+                                                <div class="card zone-card ${isUnavailable ? 'disabled' : 'selectable'}" 
+                                                     onclick="${!isUnavailable ? `selectZoneForBooking(${zone.zone_id}, ${eventId}, '${zone.zone_name}', ${zone.zone_price})` : ''}"
+                                                     style="${isUnavailable ? 'opacity: 0.5; cursor: not-allowed;' : 'cursor: pointer;'}"
+                                                     data-zone-id="${zone.zone_id}">
+                                                    <div class="card-body text-center">
+                                                        <h6 class="card-title">${zone.zone_name}</h6>
+                                                        <p class="card-text text-muted mb-2">${zone.zone_description || 'Стандартная зона'}</p>
+                                                        <div class="d-flex justify-content-between align-items-center">
+                                                            <span class="badge ${isUnavailable ? 'bg-danger' : 'bg-primary'}">
+                                                                ${availableSeats} ${availableSeats === 1 ? 'место' : 'мест'}
+                                                            </span>
+                                                            <strong class="text-success fs-6">
+                                                                ${formatPrice(zone.zone_price)}
+                                                            </strong>
+                                                        </div>
+                                                        ${isUnavailable ? 
+                                                            '<small class="text-danger mt-2 d-block">Мест нет</small>' : 
+                                                            '<small class="text-muted mt-2 d-block">Нажмите для выбора</small>'
+                                                        }
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Seat Selection (initially hidden) -->
+                        <div class="card d-none" id="seatSelectionCard">
+                            <div class="card-header">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-chair me-1"></i>Шаг 2: Выберите место
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="seat-legend mb-3 text-center">
+                                    <span class="badge bg-light text-dark me-2">
+                                        <i class="fas fa-square me-1"></i>Свободно
+                                    </span>
+                                    <span class="badge bg-success me-2">
+                                        <i class="fas fa-square me-1"></i>Выбрано
+                                    </span>
+                                    <span class="badge bg-danger">
+                                        <i class="fas fa-square me-1"></i>Занято
+                                    </span>
+                                </div>
+                                <div id="seatSelection">
+                                    <!-- Seats will be loaded here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Booking Summary -->
+                    <div class="col-lg-4">
+                        <div class="card sticky-top" style="top: 20px;">
+                            <div class="card-header">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-receipt me-1"></i>Сводка бронирования
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <strong>Мероприятие:</strong><br>
+                                    <span class="text-muted">${event.title}</span>
+                                </div>
+                                <div class="mb-3">
+                                    <strong>Дата:</strong><br>
+                                    <span class="text-muted">${formatDate(event.event_date)}</span>
+                                </div>
+                                <div class="mb-3">
+                                    <strong>Выбранная зона:</strong><br>
+                                    <span id="selectedZoneInfo" class="text-muted">Не выбрана</span>
+                                </div>
+                                <div class="mb-3">
+                                    <strong>Выбранное место:</strong><br>
+                                    <span id="selectedSeatInfo" class="text-muted">Не выбрано</span>
+                                </div>
+                                <div class="mb-3">
+                                    <strong>Цена:</strong><br>
+                                    <span id="selectedPriceInfo" class="text-success fs-5">Не указана</span>
+                                </div>
+                                
+                                <!-- Booking Actions -->
+                                <div class="d-grid gap-2">
+                                    <button class="btn btn-primary" id="confirmBookingBtn" disabled 
+                                            onclick="proceedToBooking()">
+                                        <i class="fas fa-check me-1"></i>Создать бронирование
+                                    </button>
+                                    <button class="btn btn-outline-secondary" onclick="resetBookingSelection()">
+                                        <i class="fas fa-undo me-1"></i>Сбросить выбор
+                                    </button>
+                                </div>
+                                
+                                <div class="alert alert-info mt-3">
+                                    <i class="fas fa-info-circle me-2"></i>
+                                    <small>
+                                        После создания бронирования у вас будет 15 минут для оплаты. 
+                                        Неоплаченные бронирования автоматически отменяются.
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Update modal content
+        $('#bookingModal .modal-content').html(html);
+        
+        // Store event data for booking
+        window.currentBookingEvent = event;
+        
+        console.log('Booking modal loaded successfully');
+        
     } catch (error) {
-        showError('Ошибка открытия формы бронирования');
+        console.error('Error loading booking modal:', error);
+        $('#bookingModal .modal-body').html(`
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <strong>Ошибка загрузки</strong>
+                <p class="mb-2">Не удалось загрузить информацию для бронирования.</p>
+                <details>
+                    <summary>Подробности ошибки</summary>
+                    <pre class="mt-2">${error.message}</pre>
+                </details>
+                <button class="btn btn-primary mt-2" onclick="showBookingModal(${eventId})">
+                    <i class="fas fa-redo me-1"></i>Попробовать снова
+                </button>
+            </div>
+        `);
     }
 }
 
