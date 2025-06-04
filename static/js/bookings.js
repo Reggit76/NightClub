@@ -204,7 +204,14 @@ async function createBooking(eventId, seatId, zonePrice) {
             if (zonePrice > 0) {
                 showPaymentModal(response.booking_id);
             } else {
-                navigateTo('my-bookings');
+                // If no price, just confirm the booking
+                try {
+                    await confirmBooking(response.booking_id);
+                    navigateTo('my-bookings');
+                } catch (error) {
+                    console.error('Error confirming booking:', error);
+                    showError(error.message || 'Не удалось подтвердить бронирование');
+                }
             }
         }
     } catch (error) {
@@ -433,7 +440,7 @@ function showPaymentModal(bookingId) {
     $('#paymentModal').remove();
     
     // Add new modal to DOM and show it
-    $('body').append(modal);
+    $('body').append(html);
     $('#paymentModal').modal('show');
     
     // Payment form handler
@@ -448,6 +455,7 @@ function showPaymentModal(bookingId) {
                  .html('<i class="fas fa-spinner fa-spin me-1"></i>Обработка...');
         
         try {
+            // Process the payment first while booking is still pending
             await apiRequest('/bookings/pay', {
                 method: 'POST',
                 body: JSON.stringify({
