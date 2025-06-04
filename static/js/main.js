@@ -1,6 +1,6 @@
-// Improved main.js with better CSRF handling
+// Improved main.js with better authentication handling
 // API configuration
-const API_URL = '';
+const API_URL = '/api/v1';
 let currentUser = null;
 
 // Add cache busting for development
@@ -93,15 +93,14 @@ function formatPrice(price) {
     }).format(price);
 }
 
-// Enhanced API request helper with session handling
+// Enhanced API request helper
 async function apiRequest(endpoint, options = {}) {
     const defaultOptions = {
         headers: {
             'Content-Type': 'application/json',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache'
-        },
-        credentials: 'include' // Important for sending cookies
+        }
     };
     
     // Add Authorization header if we have a token
@@ -110,8 +109,11 @@ async function apiRequest(endpoint, options = {}) {
         defaultOptions.headers['Authorization'] = `Bearer ${token}`;
     }
     
+    // Ensure endpoint starts with API_URL
+    const url = endpoint.startsWith('/api/') ? endpoint : `${API_URL}${endpoint}`;
+    
     try {
-        const response = await fetch(`${API_URL}${endpoint}`, {
+        const response = await fetch(url, {
             ...defaultOptions,
             ...options,
             headers: {
@@ -120,23 +122,18 @@ async function apiRequest(endpoint, options = {}) {
             }
         });
         
-        console.log(`API ${options.method || 'GET'} ${endpoint}: ${response.status}`);
+        console.log(`API ${options.method || 'GET'} ${url}: ${response.status}`);
         
         // Handle specific status codes
         if (response.status === 401) {
+            console.warn('Unauthorized - clearing auth data');
+            localStorage.removeItem('access_token');
+            currentUser = null;
+            updateAuthUI();
+            
             if (!endpoint.includes('/auth/')) {
-                console.log('Session expired - attempting to refresh...');
-                try {
-                    // Try to refresh session
-                    await apiRequest('/auth/refresh', { method: 'POST' });
-                    // Retry original request
-                    return await apiRequest(endpoint, options);
-                } catch (refreshError) {
-                    console.log('Session refresh failed - clearing auth data');
-                    currentUser = null;
-                    updateAuthUI();
-                    showError('Сессия истекла. Пожалуйста, войдите снова.');
-                }
+                showError('Сессия истекла. Пожалуйста, войдите снова.');
+                showLoginModal();
             }
             throw new Error('Unauthorized');
         }
@@ -156,18 +153,27 @@ async function apiRequest(endpoint, options = {}) {
         if (contentType && contentType.includes('application/json')) {
             const data = await response.json();
             if (!response.ok) {
-                throw new Error(data.detail || 'API request failed');
+                throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
             }
             return data;
         }
         
         if (!response.ok) {
-            throw new Error('API request failed');
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
         return null;
     } catch (error) {
-        console.error(`API error (${endpoint}):`, error);
+        console.error(`API error (${url}):`, error);
+        
+        // Don't show network errors for auth endpoints
+        if (!endpoint.includes('/auth/') && !error.message.includes('Unauthorized')) {
+            // Only show error if it's not a network issue during auth check
+            if (!(error.name === 'TypeError' && error.message.includes('fetch'))) {
+                showError(error.message || 'Ошибка сети');
+            }
+        }
+        
         throw error;
     }
 }
@@ -203,7 +209,7 @@ function navigateTo(page) {
             // Fallback to events page
             if (page !== 'events' && routes['events']) {
                 routes['events']();
-                window.history.pushState({}, '', '/events');
+                window.history.pushState({}, '', '/');
             }
         }
     } else {
@@ -241,45 +247,6 @@ window.addEventListener('popstate', () => {
     const path = window.location.pathname.substring(1);
     navigateTo(path || 'events');
 });
-
-// Enhanced authentication status check
-async function checkAuthStatus() {
-    try {
-        // Try to get session data
-        const sessionData = await apiRequest('/auth/session');
-        
-        if (sessionData) {
-            // Get full user info
-            const userInfo = await apiRequest('/auth/me');
-            
-            currentUser = {
-                user_id: userInfo.user_id,
-                username: userInfo.username,
-                email: userInfo.email,
-                first_name: userInfo.first_name,
-                last_name: userInfo.last_name,
-                role: userInfo.role,
-                is_active: userInfo.is_active
-            };
-            
-            console.log('Auth check successful, user:', currentUser);
-            updateAuthUI();
-            return true;
-        }
-    } catch (error) {
-        console.warn('Auth check failed:', error);
-        if (error.message === 'Unauthorized') {
-            // Clear user data on auth failure
-            currentUser = null;
-            updateAuthUI();
-            // Don't show error for auth check
-            return false;
-        }
-        // For other errors, show them
-        showError(error.message);
-    }
-    return false;
-}
 
 // Update UI based on authentication status
 function updateAuthUI() {
@@ -325,8 +292,12 @@ function updateAuthUI() {
 async function initializeApp() {
     console.log('Initializing application...');
     
-    // Check auth status
-    await checkAuthStatus();
+    // Check auth status first
+    try {
+        await checkAuthStatus();
+    } catch (error) {
+        console.warn('Auth check failed during initialization:', error);
+    }
     
     // Initialize routes
     initializeRoutes();
@@ -407,6 +378,17 @@ function setupEventHandlers() {
     $(document).on('click', '.toast .btn-close', function() {
         $(this).closest('.toast-container').remove();
     });
+    
+    // Global auth button handlers
+    $(document).on('click', '[data-bs-target="#loginModal"]', function(e) {
+        e.preventDefault();
+        showLoginModal();
+    });
+    
+    $(document).on('click', '[data-bs-target="#registerModal"]', function(e) {
+        e.preventDefault();
+        showRegisterModal();
+    });
 }
 
 // Handle uncaught errors
@@ -425,17 +407,31 @@ window.debugNightClub = function() {
     console.log('=== DEBUG INFO ===');
     console.log('Current User:', currentUser);
     console.log('Routes:', Object.keys(routes));
+    console.log('Token:', localStorage.getItem('access_token') ? 'Present' : 'None');
     console.log('================');
 };
 
 // Initialize when document is ready
 $(document).ready(function() {
     console.log('Document ready, initializing application...');
-    initializeApp();
+    
+    // Wait a bit for all scripts to load
+    setTimeout(() => {
+        initializeApp();
+    }, 100);
     
     // Listen for auth state changes
-    onAuthStateChanged((user) => {
-        console.log('Auth state changed:', user);
+    window.addEventListener('authChanged', function(event) {
+        console.log('Auth state changed:', event.detail);
         updateAuthUI();
     });
 });
+
+// Make key functions globally available
+window.apiRequest = apiRequest;
+window.navigateTo = navigateTo;
+window.updateAuthUI = updateAuthUI;
+window.formatDate = formatDate;
+window.formatPrice = formatPrice;
+window.showError = showError;
+window.showSuccess = showSuccess;

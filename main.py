@@ -1,4 +1,4 @@
-# Updated main.py with improved routers and static pages
+# Updated main.py with improved auth handling
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -42,6 +42,10 @@ app = FastAPI(
     - 🏛️ Admin panel with audit logs
     - 💳 Payment processing simulation
     - 🔐 Secure JWT authentication
+    
+    ## Authentication
+    - Use `/auth/login` to get JWT token
+    - Include token in Authorization header: `Bearer <token>`
     
     ## User Roles
     - **Admin**: Full access to all features including audit logs
@@ -122,14 +126,9 @@ try:
     app.include_router(events.router, prefix=f"{API_PREFIX}/events", tags=["Events"])
     app.include_router(bookings.router, prefix=f"{API_PREFIX}/bookings", tags=["Bookings"])
     app.include_router(admin.router, prefix=f"{API_PREFIX}", tags=["Administration"])
-    app.include_router(profile.router, prefix=f"{API_PREFIX}/profile", tags=["User Profile"])
+    app.include_router(profile.router, prefix=f"{API_PREFIX}/users", tags=["User Profile"])
     
     logger.info("✅ All routers loaded successfully")
-    
-    # Debug: Print all registered routes
-    for route in app.routes:
-        if hasattr(route, 'path') and hasattr(route, 'methods'):
-            logger.info(f"📍 Route: {route.methods} {route.path}")
     
 except ImportError as e:
     logger.error(f"❌ Failed to import routers: {e}")
@@ -146,6 +145,7 @@ async def get_system_info():
     return {
         "api_version": "2.0.0",
         "api_prefix": API_PREFIX,
+        "authentication": "JWT Bearer Token",
         "features": {
             "zone_based_pricing": True,
             "jwt_auth": True,
@@ -158,12 +158,21 @@ async def get_system_info():
             "events": f"{API_PREFIX}/events", 
             "bookings": f"{API_PREFIX}/bookings",
             "admin": f"{API_PREFIX}/admin",
-            "profile": f"{API_PREFIX}/profile"
+            "profile": f"{API_PREFIX}/users"
         },
         "static_pages": [
             "/profile.html",
             "/admin-dashboard.html"
         ]
+    }
+
+# User verification endpoint for frontend
+@app.get(f"{API_PREFIX}/verify")
+async def verify_user(current_user: dict = Depends(get_current_user)):
+    """Verify JWT token and return user information"""
+    return {
+        "valid": True,
+        "user": current_user
     }
 
 # Custom StaticFiles class with enhanced headers
@@ -241,12 +250,6 @@ async def internal_error_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal server error"}
     )
-
-# JWT session verification endpoint
-@app.get("/session/verify")
-async def verify_session(current_user: dict = Depends(get_current_user)):
-    """Verify JWT token and return user information"""
-    return current_user
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

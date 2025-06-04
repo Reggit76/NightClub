@@ -11,7 +11,7 @@ from pydantic import BaseModel
 logger = logging.getLogger('nightclub')
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer(auto_error=False)  # Make it optional to allow cookie auth
+security = HTTPBearer(auto_error=False)
 
 class SessionData(BaseModel):
     """Session data model for authenticated users"""
@@ -46,35 +46,32 @@ def decode_token(token: str) -> dict:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
+        logger.warning("Token expired")
         raise HTTPException(status_code=401, detail="Token has expired")
     except jwt.PyJWTError as e:
-        raise HTTPException(status_code=401, detail=f"Could not validate credentials: {str(e)}")
+        logger.warning(f"Token validation failed: {str(e)}")
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
 
 async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    session: Optional[str] = Cookie(None, alias="nightclub_session")
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> dict:
-    """Get current user from either JWT token in Authorization header or session cookie"""
+    """Get current user from JWT token in Authorization header"""
     
-    # First try Authorization header
-    if credentials and credentials.credentials:
-        try:
-            payload = decode_token(credentials.credentials)
-        except HTTPException:
-            # If Authorization header token is invalid, fall back to cookie
-            if not session:
-                raise
-            payload = decode_token(session)
-    # Then try cookie
-    elif session:
-        payload = decode_token(session)
-    else:
+    if not credentials or not credentials.credentials:
         raise HTTPException(
             status_code=401,
-            detail="No valid authentication credentials found"
+            detail="Authorization header required"
         )
 
-    # Ensure user_id is available (from either user_id or sub field)
+    try:
+        payload = decode_token(credentials.credentials)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token decode error: {str(e)}")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Ensure user_id is available
     user_id = payload.get("user_id") or int(payload.get("sub", 0))
     if not user_id:
         raise HTTPException(
@@ -105,7 +102,7 @@ async def verifier(
     request: Request,
     user: dict = Depends(get_current_user)
 ) -> SessionData:
-    """Return session data without CSRF verification"""
+    """Return session data"""
     return SessionData(
         user_id=user["user_id"],
         username=user["username"],

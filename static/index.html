@@ -12,8 +12,8 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     
     <!-- Custom CSS -->
-    <link href="/static/css/style.css?v=2" rel="stylesheet">
-    <link href="/static/css/admin.css?v=2" rel="stylesheet">
+    <link href="/static/css/style.css?v=3" rel="stylesheet">
+    <link href="/static/css/admin.css?v=3" rel="stylesheet">
     
     <!-- Meta tags for SEO and mobile optimization -->
     <meta name="description" content="Система бронирования мест в ночном клубе. Забронируйте билеты на лучшие мероприятия.">
@@ -61,11 +61,11 @@
                 
                 <!-- Authentication buttons -->
                 <div class="auth-buttons">
-                    <button class="btn btn-outline-light me-2" data-bs-toggle="modal" data-bs-target="#loginModal"
+                    <button class="btn btn-outline-light me-2" onclick="showLoginModal()"
                             aria-label="Войти в систему">
                         <i class="fas fa-sign-in-alt me-1"></i>Войти
                     </button>
-                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerModal"
+                    <button class="btn btn-primary" onclick="showRegisterModal()"
                             aria-label="Зарегистрироваться">
                         <i class="fas fa-user-plus me-1"></i>Регистрация
                     </button>
@@ -112,143 +112,6 @@
         </div>
     </main>
 
-    <!-- Login Modal -->
-    <div class="modal fade" id="loginModal" tabindex="-1" aria-labelledby="loginModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="loginModalLabel">
-                        <i class="fas fa-sign-in-alt me-2"></i>Вход в систему
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="loginForm" onsubmit="login(event)" novalidate>
-                        <div class="mb-3">
-                            <label for="loginUsername" class="form-label">
-                                <i class="fas fa-user me-1"></i>Имя пользователя
-                            </label>
-                            <input type="text" class="form-control" id="loginUsername" name="username" required 
-                                   placeholder="Введите имя пользователя" autocomplete="username">
-                            <div class="invalid-feedback">
-                                Пожалуйста, введите имя пользователя
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label for="loginPassword" class="form-label">
-                                <i class="fas fa-lock me-1"></i>Пароль
-                            </label>
-                            <input type="password" class="form-control" id="loginPassword" name="password" required
-                                   placeholder="Введите пароль" autocomplete="current-password">
-                            <div class="invalid-feedback">
-                                Пожалуйста, введите пароль
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <div class="alert alert-info">
-                                <strong>Тестовые аккаунты:</strong><br>
-                                <small>
-                                    Админ: <code>admin</code> / <code>admin123</code><br>
-                                    Пользователь: <code>user123</code> / <code>test123</code>
-                                </small>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn btn-primary w-100">
-                            <i class="fas fa-sign-in-alt me-1"></i>Войти
-                        </button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Register Modal -->
-    <div class="modal fade" id="registerModal" tabindex="-1" aria-labelledby="registerModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="registerModalLabel">
-                        <i class="fas fa-user-plus me-2"></i>Регистрация
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="registerForm" onsubmit="register(event)" novalidate>
-                        <div class="mb-3">
-                            <label for="registerUsername" class="form-label">
-                                <i class="fas fa-user me-1"></i>Имя пользователя *
-                            </label>
-                            <input type="text" class="form-control" id="registerUsername" name="username" required
-                                   placeholder="Минимум 3 символа, только буквы, цифры и _" 
-                                   pattern="[a-zA-Z0-9_]{3,}" autocomplete="username">
-                            <div class="invalid-feedback">
-                                Имя пользователя должно содержать минимум 3 символа
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label for="registerEmail" class="form-label">
-                                <i class="fas fa-envelope me-1"></i>Email *
-                            </label>
-                            <input type="email" class="form-control" id="registerEmail" name="email" required
-                                   placeholder="your@email.com" autocomplete="email">
-                            <div class="invalid-feedback">
-                                Пожалуйста, введите корректный email адрес
-                            </div>
-                        </div>
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="registerFirstName" class="form-label">
-                                    <i class="fas fa-id-card me-1"></i>Имя *
-                                </label>
-                                <input type="text" class="form-control" id="registerFirstName" name="first_name" required
-                                       placeholder="Ваше имя" autocomplete="given-name">
-                                <div class="invalid-feedback">
-                                    Пожалуйста, введите ваше имя
-                                </div>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="registerLastName" class="form-label">Фамилия *</label>
-                                <input type="text" class="form-control" id="registerLastName" name="last_name" required
-                                       placeholder="Ваша фамилия" autocomplete="family-name">
-                                <div class="invalid-feedback">
-                                    Пожалуйста, введите вашу фамилию
-                                </div>
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label for="registerPassword" class="form-label">
-                                <i class="fas fa-lock me-1"></i>Пароль *
-                            </label>
-                            <input type="password" class="form-control" id="registerPassword" name="password" required
-                                   placeholder="Минимум 6 символов" minlength="6" autocomplete="new-password">
-                            <div class="invalid-feedback">
-                                Пароль должен содержать минимум 6 символов
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label for="registerPasswordConfirm" class="form-label">
-                                <i class="fas fa-lock me-1"></i>Подтверждение пароля *
-                            </label>
-                            <input type="password" class="form-control" id="registerPasswordConfirm" name="password_confirm" required
-                                   placeholder="Повторите пароль" autocomplete="new-password">
-                            <div class="invalid-feedback">
-                                Пароли не совпадают
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <small class="text-muted">
-                                * - обязательные поля
-                            </small>
-                        </div>
-                        <button type="submit" class="btn btn-primary w-100">
-                            <i class="fas fa-user-plus me-1"></i>Зарегистрироваться
-                        </button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <!-- Error Boundary -->
     <div id="error-boundary" style="display: none;">
         <div class="container mt-5">
@@ -271,14 +134,14 @@
             crossorigin="anonymous"></script>
     
     <!-- Load all modules first -->
-    <script src="/static/js/events.js?v=2"></script>
-    <script src="/static/js/bookings.js?v=2"></script>
-    <script src="/static/js/admin.js?v=2"></script>
-    <script src="/static/js/profile.js?v=2"></script>
-    <script src="/static/js/auth.js?v=2"></script>
+    <script src="/static/js/auth.js?v=3"></script>
+    <script src="/static/js/events.js?v=3"></script>
+    <script src="/static/js/bookings.js?v=3"></script>
+    <script src="/static/js/admin.js?v=3"></script>
+    <script src="/static/js/profile.js?v=3"></script>
     
     <!-- Load main.js last to initialize everything -->
-    <script src="/static/js/main.js?v=2"></script>
+    <script src="/static/js/main.js?v=3"></script>
 
     <!-- Global error handler -->
     <script>
