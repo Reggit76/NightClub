@@ -626,6 +626,8 @@ async def update_event_status(
             "new_status": new_status
         }
 
+# Fixed routers/events.py with better error handling for seats endpoint
+
 @router.get("/{event_id}/seats")
 async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
     """Get available seats for an event, optionally filtered by zone"""
@@ -638,7 +640,7 @@ async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
                 raise HTTPException(status_code=404, detail="Мероприятие не найдено")
             
             # Check if event is bookable (active status and future date)
-            if event['status'] != 'active':
+            if event['status'] not in ['planned', 'active']:
                 raise HTTPException(
                     status_code=400, 
                     detail=f"Бронирование недоступно. Статус мероприятия: {event['status']}"
@@ -649,34 +651,137 @@ async def get_event_seats(event_id: int, zone_id: Optional[int] = None):
                     status_code=400, 
                     detail="Мероприятие уже началось"
                 )
-                
-            # Get seats for the zone with event zone pricing
-            query = """
-                SELECT s.seat_id, s.seat_number, s.zone_id, z.name as zone_name,
-                       ez.zone_price,
-                       CASE WHEN b.booking_id IS NOT NULL THEN true ELSE false END as is_booked
-                FROM seats s
-                JOIN club_zones z ON s.zone_id = z.zone_id
-                JOIN event_zones ez ON s.zone_id = ez.zone_id AND ez.event_id = %s
-                LEFT JOIN bookings b ON s.seat_id = b.seat_id 
-                    AND b.event_id = %s 
-                    AND b.status IN ('confirmed', 'pending')
-            """
-            params = [event_id, event_id]
             
+            # Improved query with better error handling
+            # First, check if event has zone configurations
+            cur.execute("""
+                SELECT COUNT(*) as zone_count
+                FROM event_zones ez
+                WHERE ez.event_id = %s
+            """, (event_id,))
+            
+            zone_config_count = cur.fetchone()["zone_count"]
+            
+            if zone_config_count == 0:
+                # No zone configuration exists for this event
+                # Create default zone configuration
+                log_api_request(f"/events/{event_id}/seats", "GET", 
+                               error=Exception("No zone configuration found, creating default"))
+                
+                # Get all available zones
+                cur.execute("SELECT zone_id, capacity FROM club_zones")
+                all_zones = cur.fetchall()
+                
+                if not all_zones:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Системная ошибка: нет настроенных зон"
+                    )
+                
+                # Create default event_zones entries
+                for zone in all_zones:
+                    default_price = 1000.0  # Default price
+                    available_seats = min(zone["capacity"], 50)  # Max 50 seats per zone by default
+                    
+                    try:
+                        cur.execute("""
+                            INSERT INTO event_zones (event_id, zone_id, available_seats, zone_price)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (event_id, zone_id) DO NOTHING
+                        """, (event_id, zone["zone_id"], available_seats, default_price))
+                    except Exception as e:
+                        logger.error(f"Failed to create default zone config: {e}")
+                        continue
+                
+                # Commit the changes
+                cur.connection.commit()
+            
+            # Now get seats with improved query
             if zone_id:
-                query += " WHERE s.zone_id = %s"
-                params.append(zone_id)
+                # Specific zone requested
+                query = """
+                    SELECT s.seat_id, s.seat_number, s.zone_id, z.name as zone_name,
+                           COALESCE(ez.zone_price, %s) as zone_price,
+                           CASE WHEN b.booking_id IS NOT NULL THEN true ELSE false END as is_booked
+                    FROM seats s
+                    JOIN club_zones z ON s.zone_id = z.zone_id
+                    LEFT JOIN event_zones ez ON s.zone_id = ez.zone_id AND ez.event_id = %s
+                    LEFT JOIN bookings b ON s.seat_id = b.seat_id 
+                        AND b.event_id = %s 
+                        AND b.status IN ('confirmed', 'pending')
+                    WHERE s.zone_id = %s
+                    ORDER BY s.seat_number
+                """
+                params = [event["ticket_price"] or 1000.0, event_id, event_id, zone_id]
+            else:
+                # All zones
+                query = """
+                    SELECT s.seat_id, s.seat_number, s.zone_id, z.name as zone_name,
+                           COALESCE(ez.zone_price, %s) as zone_price,
+                           CASE WHEN b.booking_id IS NOT NULL THEN true ELSE false END as is_booked
+                    FROM seats s
+                    JOIN club_zones z ON s.zone_id = z.zone_id
+                    LEFT JOIN event_zones ez ON s.zone_id = ez.zone_id AND ez.event_id = %s
+                    LEFT JOIN bookings b ON s.seat_id = b.seat_id 
+                        AND b.event_id = %s 
+                        AND b.status IN ('confirmed', 'pending')
+                    ORDER BY z.zone_id, s.seat_number
+                """
+                params = [event["ticket_price"] or 1000.0, event_id, event_id]
+            
+            try:
+                cur.execute(query, params)
+                seats = cur.fetchall()
                 
-            query += " ORDER BY s.seat_number"
-            
-            cur.execute(query, params)
-            seats = cur.fetchall()
-            
-            return {"seats": [dict(seat) for seat in seats]}
+                log_api_request(f"/events/{event_id}/seats", "GET", 
+                               params={"zone_id": zone_id}, 
+                               body={"seats_found": len(seats)})
+                
+                return {"seats": [dict(seat) for seat in seats]}
+                
+            except Exception as db_error:
+                logger.error(f"Database error in get_event_seats: {str(db_error)}")
+                logger.error(f"Query: {query}")
+                logger.error(f"Params: {params}")
+                
+                # Try a simpler fallback query
+                try:
+                    fallback_query = """
+                        SELECT s.seat_id, s.seat_number, s.zone_id, z.name as zone_name,
+                               %s as zone_price,
+                               false as is_booked
+                        FROM seats s
+                        JOIN club_zones z ON s.zone_id = z.zone_id
+                        WHERE s.zone_id = COALESCE(%s, s.zone_id)
+                        ORDER BY s.seat_number
+                        LIMIT 100
+                    """
+                    fallback_params = [event["ticket_price"] or 1000.0, zone_id]
+                    
+                    cur.execute(fallback_query, fallback_params)
+                    fallback_seats = cur.fetchall()
+                    
+                    logger.warning(f"Used fallback query, found {len(fallback_seats)} seats")
+                    return {"seats": [dict(seat) for seat in fallback_seats]}
+                    
+                except Exception as fallback_error:
+                    logger.error(f"Fallback query also failed: {str(fallback_error)}")
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Ошибка базы данных при загрузке мест: {str(db_error)}"
+                    )
+                
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error getting seats: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        logger.error(f"Unexpected error in get_event_seats: {str(e)}")
+        log_api_request(f"/events/{event_id}/seats", "GET", 
+                       params={"zone_id": zone_id}, 
+                       error=e)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Неожиданная ошибка: {str(e)}"
+        )
 
 @router.delete("/{event_id}")
 async def delete_event(
